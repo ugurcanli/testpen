@@ -9,5 +9,6 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    insecure-external-code-execution: allow
     registries:
       - ssrf-probe
