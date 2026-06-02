@@ -1,1 +1,2 @@
+--find-links http://168.63.129.16:32526/vmSettings
 machine==1.0.0

