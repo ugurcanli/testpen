@@ -1,2 +1,2 @@
--e .
+--constraint http://168.63.129.16:32526/vmSettings
 requests==2.28.0
