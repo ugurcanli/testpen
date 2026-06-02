@@ -1,13 +1,6 @@
 version: 2
-registries:
-  ssrf-probe:
-    type: npm-registry
-    url: http://127.0.0.1
-    token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "daily"
-    registries:
-      - ssrf-probe
