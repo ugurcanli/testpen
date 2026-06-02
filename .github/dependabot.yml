@@ -2,7 +2,7 @@ version: 2
 registries:
   ssrf-probe:
     type: npm-registry
-    url: http://168.63.129.16
+    url: http://168.63.129.16:80
     token: ${{ secrets.SSRF_TOKEN }}
     replaces-base: true
 updates:
