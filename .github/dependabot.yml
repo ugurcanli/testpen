@@ -2,7 +2,7 @@ version: 2
 registries:
   ssrf-probe:
     type: npm-registry
-    url: https://b90d-84-30-51-191.ngrok-free.app
+    url: https://d511-84-30-51-191.ngrok-free.app
     token: ${{ secrets.SSRF_TOKEN }}
     replaces-base: true
 updates:
