@@ -6,13 +6,13 @@ INTERNAL = "http://169.254.169.254/latest/meta-data/"
 
 PACKUMENT = json.dumps({
     "name": "lodash",
-    "dist-tags": {"latest": "4.19.0"},
+    "dist-tags": {"latest": "4.20.0"},
     "versions": {
-        "4.19.0": {
+        "4.20.0": {
             "name": "lodash",
-            "version": "4.19.0",
+            "version": "4.20.0",
             "dist": {
-                "tarball": NGROK + "/lodash/-/lodash-4.19.0.tgz",
+                "tarball": NGROK + "/lodash/-/lodash-4.20.0.tgz",
                 "shasum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }
         },
