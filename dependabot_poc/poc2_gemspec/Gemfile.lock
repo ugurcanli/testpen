@@ -1,15 +1,15 @@
 PATH
   remote: .
   specs:
-    legitlooking (1.0.0)
-      rails (~> 7.0.0)
-      devise (~> 4.9.0)
+    legitlooking (1.0.1)
+      rails (~> 7.0)
+      devise (~> 4.9)
 
 GEM
   remote: https://rubygems.org/
   specs:
-    rails (7.0.8)
-    devise (4.9.4)
+    rails (7.0.4)
+    devise (4.9.2)
 
 BUNDLED WITH
    2.4.0
