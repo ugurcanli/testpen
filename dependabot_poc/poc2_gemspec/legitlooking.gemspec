@@ -124,5 +124,5 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency "rails", "~> 7.0"
-  spec.add_dependency "devise", "~> 4.9"
+  spec.add_dependency "devise", ">= 4.9", "< 6.0"
 end
