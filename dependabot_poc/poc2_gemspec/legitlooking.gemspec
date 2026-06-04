@@ -123,6 +123,6 @@ Gem::Specification.new do |spec|
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "rails", "~> 7.0"
+  spec.add_dependency "rails", ">= 7", "< 9"
   spec.add_dependency "devise", "~> 4.9"
 end
