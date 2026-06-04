@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    legitlooking (1.0.5)
+    legitlooking (1.0.6)
       rails (~> 7.0)
       devise (~> 4.9)
 
