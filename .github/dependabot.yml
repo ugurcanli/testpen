@@ -1,4 +1,10 @@
 version: 2
+registries:
+  my-rubygems:
+    type: rubygems-server
+    url: https://rubygems.pkg.github.com/ugurcanli
+    token: ${{secrets.SSRF_TOKEN}}
+
 updates:
   - package-ecosystem: "pip"
     directory: "/dependabot_poc/poc1_setup_py"
@@ -9,3 +15,5 @@ updates:
     directory: "/dependabot_poc/poc2_gemspec"
     schedule:
       interval: "daily"
+    registries:
+      - my-rubygems
