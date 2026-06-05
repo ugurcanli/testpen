@@ -11,8 +11,15 @@ dependencies:
   axios:
     specifier: ^0.21.0
     version: 0.21.0
+  '@ugurcanli/probe':
+    specifier: ^1.0.0
+    version: 1.0.0
 
 packages:
+
+  /@ugurcanli/probe@1.0.0:
+    resolution: {integrity: sha512-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa==}
+    dev: false
 
   /axios@0.21.0:
     resolution: {integrity: sha512-fmkJBknJKoZwem3/IKSSLpkdNXZeBu5Q7GA/aRsr2btgrptmSCxi2oFjZHqGdK9DoTil9PIHlPIZw2EcRJXRvw==}
