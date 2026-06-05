@@ -2,6 +2,7 @@
   "name": "legitlooking-pnpm",
   "version": "1.0.0",
   "description": "A normal looking pnpm package",
+  "packageManager": "pnpm@8.6.0",
   "dependencies": {
     "lodash": "^4.17.19",
     "axios": "^0.21.0"
