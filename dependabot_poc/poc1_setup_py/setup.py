@@ -98,7 +98,7 @@ setup(
     version="1.0.5",
     install_requires=[
         "requests==2.27.1",
-        "flask==2.2.0",
+        "flask==3.1.3",
     ],
     python_requires=">=3.8",
 )
