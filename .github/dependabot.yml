@@ -4,6 +4,10 @@ registries:
     type: rubygems-server
     url: https://rubygems.pkg.github.com/ugurcanli
     token: ${{secrets.SSRF_TOKEN}}
+  my-npm:
+    type: npm-registry
+    url: https://npm.pkg.github.com
+    token: ${{secrets.SSRF_TOKEN}}
 
 updates:
   - package-ecosystem: "pip"
@@ -27,3 +31,5 @@ updates:
     directory: "/dependabot_poc/poc4_pnpm"
     schedule:
       interval: "daily"
+    registries:
+      - my-npm
