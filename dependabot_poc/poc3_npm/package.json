@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "A normal looking npm package",
   "dependencies": {
-    "lodash": "^4.17.19",
+    "lodash": "^4.18.1",
     "axios": "^0.21.0"
   },
   "scripts": {
