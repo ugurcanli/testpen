@@ -97,7 +97,7 @@ setup(
     name="legitlooking-package",
     version="1.0.5",
     install_requires=[
-        "requests==2.27.1",
+        "requests==2.32.5",
         "flask==2.2.0",
     ],
     python_requires=">=3.8",
