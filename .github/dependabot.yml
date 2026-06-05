@@ -22,3 +22,8 @@ updates:
     directory: "/dependabot_poc/poc3_npm"
     schedule:
       interval: "daily"
+
+  - package-ecosystem: "npm"
+    directory: "/dependabot_poc/poc4_pnpm"
+    schedule:
+      interval: "daily"
