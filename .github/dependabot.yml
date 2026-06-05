@@ -17,3 +17,8 @@ updates:
       interval: "daily"
     registries:
       - my-rubygems
+
+  - package-ecosystem: "npm"
+    directory: "/dependabot_poc/poc3_npm"
+    schedule:
+      interval: "daily"
