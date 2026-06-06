@@ -44,3 +44,8 @@ updates:
     directory: "/dependabot_poc/poc6_deep_chain/imds_identity"
     schedule:
       interval: "daily"
+
+  - package-ecosystem: "pip"
+    directory: "/dependabot_poc/poc7_deeper/wireserver_goalstate"
+    schedule:
+      interval: "daily"
