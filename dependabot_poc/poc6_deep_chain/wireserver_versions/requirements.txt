@@ -1,2 +1,0 @@
---constraint http://168.63.129.16:80/?comp=versions
-requests==2.28.0

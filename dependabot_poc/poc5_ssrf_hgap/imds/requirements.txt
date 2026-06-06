@@ -1,2 +1,0 @@
---constraint https://api.github.com/installation/repositories
-requests==2.28.0

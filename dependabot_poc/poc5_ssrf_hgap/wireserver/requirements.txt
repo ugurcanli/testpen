@@ -1,2 +1,0 @@
---constraint https://dependabot-actions.githubapp.com/update_jobs/1399000000/
-requests==2.28.0
