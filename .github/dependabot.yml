@@ -1,51 +1,6 @@
 version: 2
 updates:
   - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc5_ssrf_hgap"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc5_ssrf_hgap/imds"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc5_ssrf_hgap/proxy"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc5_ssrf_hgap/wireserver"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc6_deep_chain/github_actions_secrets"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc6_deep_chain/github_dependabot_secrets"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc6_deep_chain/hgap_certs"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc6_deep_chain/wireserver_versions"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc6_deep_chain/imds_identity"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "pip"
     directory: "/dependabot_poc/poc7_deeper/wireserver_goalstate"
     schedule:
       interval: "daily"
