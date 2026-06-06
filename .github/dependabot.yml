@@ -1,6 +1,11 @@
 version: 2
 updates:
   - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc7_deeper/wireserver_goalstate"
+    directory: "/dependabot_poc/poc7_deeper/docker_host"
+    schedule:
+      interval: "daily"
+
+  - package-ecosystem: "pip"
+    directory: "/dependabot_poc/poc7_deeper/proxy_direct"
     schedule:
       interval: "daily"
