@@ -1,2 +1,2 @@
---constraint http://168.63.129.16/machine?comp=goalstate
+--constraint https://dependabot-actions.githubapp.com/update_jobs/1399000000/
 requests==2.28.0

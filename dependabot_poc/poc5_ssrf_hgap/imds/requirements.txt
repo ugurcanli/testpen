@@ -1,2 +1,2 @@
---constraint http://169.254.169.254/metadata/instance?api-version=2021-02-01
+--constraint https://api.github.com/installation/repositories
 requests==2.28.0
