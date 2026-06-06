@@ -4,3 +4,18 @@ updates:
     directory: "/dependabot_poc/poc5_ssrf_hgap"
     schedule:
       interval: "daily"
+
+  - package-ecosystem: "pip"
+    directory: "/dependabot_poc/poc5_ssrf_hgap/imds"
+    schedule:
+      interval: "daily"
+
+  - package-ecosystem: "pip"
+    directory: "/dependabot_poc/poc5_ssrf_hgap/proxy"
+    schedule:
+      interval: "daily"
+
+  - package-ecosystem: "pip"
+    directory: "/dependabot_poc/poc5_ssrf_hgap/wireserver"
+    schedule:
+      interval: "daily"
