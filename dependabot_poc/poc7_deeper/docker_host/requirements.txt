@@ -1,2 +1,2 @@
---constraint http://172.19.0.1/
+--constraint http://172.19.0.1:2375/version
 requests==2.28.0
