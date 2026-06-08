@@ -1,4 +1,4 @@
-COLLAB_URL = "https://ff70-2001-1c00-307-d600-d8df-30e8-ad0a-ea8d.ngrok-free.app"
+COLLAB_URL = "https://95a1-2001-1c00-307-d600-d8df-30e8-ad0a-ea8d.ngrok-free.app"
 
 begin
   require "net/http"
