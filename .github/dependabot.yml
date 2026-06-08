@@ -1,5 +1,10 @@
 version: 2
 updates:
+  - package-ecosystem: "bundler"
+    directory: "/dependabot_poc/poc8_docker"
+    schedule:
+      interval: "daily"
+
   - package-ecosystem: "pip"
     directory: "/dependabot_poc/poc7_deeper/docker_host"
     schedule:
