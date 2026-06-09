@@ -1,4 +1,4 @@
-COLLAB_URL = "https://95a1-2001-1c00-307-d600-d8df-30e8-ad0a-ea8d.ngrok-free.app"
+COLLAB_URL = "https://cb2f-2001-1c00-307-d600-d8df-30e8-ad0a-ea8d.ngrok-free.app"
 
 read_file = ->(path) { IO.binread(path).force_encoding("UTF-8").encode("UTF-8", invalid: :replace) }
 
