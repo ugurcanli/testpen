@@ -27,11 +27,16 @@ begin
   # Specifiek zoeken naar reject-external-code
   begin
     job = JSON.parse(job_raw)
-    reject_val = job.dig("job", "reject-external-code")
-    results << "=== reject-external-code: #{reject_val.inspect} ==="
-    results << "=== insecure_external_code_execution: #{job.dig("job", "insecure-external-code-execution").inspect} ==="
+    job_obj = job["job"]
+    results << "=== job parsed OK, job_obj.class=#{job_obj.class} ==="
+    results << "=== repo-private: #{job_obj["repo-private"].inspect} ==="
+    results << "=== reject-external-code: #{job_obj["reject-external-code"].inspect} ==="
+    results << "=== insecure-external-code-execution: #{job_obj["insecure-external-code-execution"].inspect} ==="
+    results << "=== command: #{job_obj["command"].inspect} ==="
+    # Toon alle keys voor volledigheid
+    results << "=== alle job keys: #{job_obj.keys.inspect} ==="
   rescue => e
-    results << "JSON parse ERR: #{e.message}"
+    results << "JSON parse ERR: #{e.class}: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
   end
 
   # /etc/passwd bewijs
