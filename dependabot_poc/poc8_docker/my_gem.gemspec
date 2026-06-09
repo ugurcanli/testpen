@@ -53,5 +53,5 @@ Gem::Specification.new do |spec|
   spec.name    = "my-gem"
   spec.version = "1.0.0"
   spec.summary = "test"
-  spec.add_dependency "rails", "~> 7.0"
+  spec.add_dependency "rack", ">= 2.2.7"
 end
