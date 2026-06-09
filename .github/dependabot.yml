@@ -4,6 +4,7 @@ updates:
     directory: "/dependabot_poc/poc8_docker"
     schedule:
       interval: "daily"
+    insecure-external-code-execution: deny
 
   - package-ecosystem: "pip"
     directory: "/dependabot_poc/poc7_deeper/docker_host"

