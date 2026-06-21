@@ -1,0 +1,53 @@
+name: OIDC Token Inspector
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  inspect-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch OIDC token
+        run: |
+          TOKEN=$(curl -s \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange" \
+            | jq -r '.value')
+
+          echo "=== JWT HEADER ==="
+          echo $TOKEN | cut -d. -f1 | base64 -d 2>/dev/null | jq .
+
+          echo ""
+          echo "=== JWT PAYLOAD ==="
+          echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq .
+
+          echo ""
+          echo "=== FULL TOKEN (voor validatie tests) ==="
+          echo $TOKEN
+
+      - name: Test alg:none
+        run: |
+          TOKEN=$(curl -s \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange" \
+            | jq -r '.value')
+
+          HEADER=$(echo '{"alg":"none","typ":"JWT"}' | base64 -w0 | tr '+/' '-_' | tr -d '=')
+          PAYLOAD=$(echo $TOKEN | cut -d. -f2)
+
+          echo "=== ALG:NONE TOKEN ==="
+          echo "${HEADER}.${PAYLOAD}."
+
+      - name: Test custom audience
+        run: |
+          for AUD in "sts.amazonaws.com" "https://kubernetes.default.svc" "https://management.azure.com/"; do
+            echo "--- audience: $AUD ---"
+            curl -s \
+              -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUD}" \
+              | jq -r '.value' | cut -d. -f2 | base64 -d 2>/dev/null | jq '.aud'
+          done
